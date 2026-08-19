@@ -1,0 +1,11 @@
+=== Baseline outcome (no mitigation, Sec. 3 scope) ===
+Collision threshold (1.2 m) crossed at cycle 129 (t = 19.35s)
+
+=== Detection outcome (Sec. 6) ===
+  D1: declared D2 compromised at cycle 245 (t = 36.75s)
+  D3: declared D2 compromised at cycle 245 (t = 36.75s)
+  D4: declared D2 compromised at cycle 245 (t = 36.75s)
+  D5: declared D2 compromised at cycle 72 (t = 10.80s)
+  D6: declared D2 compromised at cycle 228 (t = 34.20s)
+
+Attack: D2 -> D5, enlarge by 2.5 m, onset cycle 60, staircase +0.05 m every 10 cycles (1.5s per step)

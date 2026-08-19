@@ -1,0 +1,15 @@
+# Byte-compiled / cache
+__pycache__/
+*.pyc
+
+# Regeneratable plot output -- run simulate.py to reproduce from the
+# fixed seed (RNG_SEED in simulate.py). Keep this ignored so the repo
+# doesn't accumulate binary diffs every time a parameter changes.
+outputs/*.png
+
+# Keep the summary text (small, human-readable, useful in diffs/PRs)
+!outputs/summary.txt
+
+# OS/editor cruft
+.DS_Store
+*.swp
