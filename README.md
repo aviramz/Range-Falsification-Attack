@@ -15,11 +15,21 @@ GNSS-Denied UWB Drone Swarms"* — built to answer two questions concretely:
 ```
 pip install -r requirements.txt
 python3 simulate.py
+python3 animate.py     # optional: animated visualization (see below)
 ```
 
 Results are deterministic: `RNG_SEED = 7` in `simulate.py` reproduces exactly
 the numbers in the table below. Produces `outputs/part1_*.png`,
 `outputs/part2_*.png`, and `outputs/summary.txt`.
+
+`animate.py` re-runs the same deterministic scenario and renders it as an
+animation (`outputs/swarm_animation.mp4` and `.gif`): drones flying in
+formation, the falsified link highlighted in red once the attack starts, a
+live green checkmark next to each drone the moment it independently
+declares D2 compromised, and a synchronized safety-margin panel showing the
+true minimum separation and collision threshold. The MP4 requires ffmpeg on
+your PATH; the GIF only needs Pillow (already in `requirements.txt`) and is
+produced either way.
 
 ## What's simulated
 
@@ -109,3 +119,4 @@ relying on any one of them.
 - `ranging.py` — full-mesh ranging + the attack model
 - `detection.py` — Layers 1/2/3 + Sec. 6.4 local evidence combination
 - `simulate.py` — orchestration, plotting, `summary.txt`
+- `animate.py` — animated visualization of the same scenario (MP4 + GIF)

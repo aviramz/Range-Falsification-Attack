@@ -6,6 +6,8 @@ __pycache__/
 # fixed seed (RNG_SEED in simulate.py). Keep this ignored so the repo
 # doesn't accumulate binary diffs every time a parameter changes.
 outputs/*.png
+outputs/*.gif
+outputs/*.mp4
 
 # Keep the summary text (small, human-readable, useful in diffs/PRs)
 !outputs/summary.txt
