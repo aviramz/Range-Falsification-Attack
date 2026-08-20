@@ -32,6 +32,20 @@ class AttackConfig:
         """
         Staircase bias profile: the reported distance jumps by `step_size_m`
         every `step_every` cycles until `magnitude_m` is reached, then holds.
+
+        IMPORTANT, learned the hard way while scaling this simulation to
+        larger N: `magnitude_m` is a CEILING, not a target that is
+        automatically reached. Within a finite simulation of C cycles, the
+        actual achieved bias by the end is
+            min(magnitude_m, ((C - onset_cycle) // step_every) * step_size_m).
+        If magnitude_m is set well above what the ramp rate can reach in the
+        simulated duration, changing magnitude_m has NO effect on the run
+        at all -- only step_size_m (and step_every) do. Set magnitude_m
+        generously high (a true non-binding ceiling) and tune step_size_m
+        directly to control how much bias is actually injected; do not
+        assume magnitude_m is "the attack size" without checking
+        bias_at(final_cycle) for your specific onset/duration/rate.
+
         A *smooth* linear ramp was tried first and found to be perfectly
         absorbed by a constant-velocity EKF's velocity state (a linear range
         ramp is indistinguishable from the neighbor legitimately moving away

@@ -31,6 +31,50 @@ true minimum separation and collision threshold. The MP4 requires ffmpeg on
 your PATH; the GIF only needs Pillow (already in `requirements.txt`) and is
 produced either way.
 
+![Swarm range-falsification attack: detection and attribution](outputs/swarm_animation.gif)
+
+`compare_n.py` runs the same scenario at N=6 and N=15 side by side (see
+"Scaling to more drones" below) into `outputs/n06/` and `outputs/n15/`.
+
+## Scaling to more drones
+
+The formation generalizes to any N via `generate_formation()` (a
+sunflower/Fibonacci disk layout — even 2D spread, no accidental
+collinearity, for any N). The attacker and its victim (nearest neighbor)
+are chosen automatically.
+
+**A real, non-obvious finding from doing this**: with a *fixed* attack
+rate, N=15 shows dramatically *less* physical danger than N=6 — no
+collision at all, versus a clean collision at N=6. This is not a bug. Each
+drone's formation guidance (Sec. 5.2) sums a spring correction from every
+other drone; the one falsified link is 1-in-5 of that sum at N=6 but only
+1-in-14 at N=15, so a larger, more connected swarm is structurally more
+robust to a single liar purely as a byproduct of full-mesh formation
+control — nothing to do with detection. `compare_n.py` re-tunes the
+attack's ramp rate per N (found by direct sweep, not guessed) to restore
+comparable danger at both sizes for an apples-to-apples comparison:
+
+| N | attack step size | Collision? | Time to collision | Victim's detection time |
+|---|---|---|---|---|
+| 6 | 0.5 m / 10 cycles | Yes | t = 55.80s | t = 10.65s |
+| 15 | 1.2 m / 10 cycles | Yes | t = 35.25s | t = 10.65s |
+
+The detection architecture itself required **no changes at all** to scale
+from 6 to 15 drones — same code, same layers, same local evidence rule.
+Only the physical attack parameters needed re-tuning, and only because the
+*control* architecture's robustness scales with connectivity, which is a
+separate, interesting result in its own right.
+
+**Also worth knowing**: attack severity does not increase monotonically
+with the ramp rate (`step_size_m`) — e.g. at N=6, `step_size=0.7` and `0.9`
+produced *no* collision while `0.5` did. This reflects genuine nonlinear
+dynamics in the collision-safety filter's reactive correction (a large
+enough sudden error can trigger a strong-enough corrective response to
+overshoot back to safety), not a bug. Don't assume "bigger attack = more
+danger" without checking; `compare_n.py`'s sweep methodology (documented in
+its module docstring) is the reliable way to find a dangerous setting for
+a new configuration.
+
 ## What's simulated
 
 - **6 drones** in a well-spread 2D formation (mirrors the paper's Fig. 1
@@ -70,20 +114,20 @@ not a simulation bug, and it's why the staircase profile is used instead —
 consistent with the paper's own framing of the gradual attack as one that
 "remains within the swarm's ordinary noise floor on any single exchange."
 
-## Key results (seed=7, default parameters)
+## Key results (seed=7, default parameters: N=15)
 
 | Event | Time |
 |---|---|
 | Attack onset | t = 9.0s |
-| **Collision threshold crossed (undefended)** | **t = 19.35s** |
-| D5 (victim, has direct Layer-3 access) declares D2 compromised | **t = 10.80s** |
-| D6 declares D2 compromised (Layer 1 + Layer 2 only) | t = 34.20s |
-| D1, D3, D4 declare D2 compromised (Layer 1 + Layer 2 only) | t = 36.75s |
+| **Collision threshold crossed (undefended)** | **t = 35.25s** |
+| D7 (victim, has direct Layer-3 access) declares D2 compromised | **t = 10.65s** |
+| Fastest indirect observer (D8, Layer 1 + Layer 2 only) | t = 12.90s |
+| Remaining 12 non-victim drones (Layer 1 + Layer 2 only) | t = 13.05-13.35s |
 
 The headline result: **the victim detects and correctly attributes the
-attack ~8.5 seconds before physical collision occurs.** Drones without
+attack ~24.6 seconds before physical collision occurs.** Drones without
 direct Layer-3 access (i.e., that never initiated an exchange against the
-attacker themselves) take substantially longer, relying on Layer 1's CUSUM
+attacker themselves) take a bit longer, relying on Layer 1's CUSUM
 and Layer 2's geometric corroboration alone — a direct, visible
 illustration of why the paper layers multiple mechanisms rather than
 relying on any one of them.

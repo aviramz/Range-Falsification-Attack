@@ -3,9 +3,9 @@ simulate.py
 ===========
 Orchestrates the full simulation described to the user:
 
-  1. n drones organized in a fixed 2D formation (mirrors the paper's
-     teaser figure, Fig. 1: drones D1..D6, attacker D2 falsifying its
-     range to D5).
+  1. n drones organized in a fixed 2D formation (a well-spread sunflower/
+     Fibonacci disk layout, scalable to any N -- see generate_formation()).
+     The attacker and its nearest-neighbor victim are chosen automatically.
   2. Ranging + EKF + formation guidance + collision-safety filter run
      every cycle exactly as in the paper's pipeline (Sec. 5.2). No
      mitigation is applied to a flagged link -- consistent with the
@@ -44,7 +44,7 @@ os.makedirs(OUT, exist_ok=True)
 # Configuration
 # ----------------------------------------------------------------------
 RNG_SEED = 7
-N = 6
+N = 15
 DT = 0.15
 CYCLES = 420
 SIGMA_RANGE = 0.05          # UWB range measurement noise, std (m)
@@ -57,24 +57,48 @@ D_MIN = 1.2                 # collision radius (m)
 KP, KD, A_LIMIT = 2.0, 2.5, 3.0
 SAFETY_ALPHA = 2.5
 
-ATTACKER = 1   # "D2" in the paper's 1-indexed teaser figure
-VICTIM = 4     # "D5" -- same falsified link shown in Fig. 1
+ATTACKER = 1   # index into the generated formation (see generate_formation below)
 ATTACK_DIRECTION = "enlarge"
-ATTACK_MAGNITUDE_M = 2.5
+ATTACK_MAGNITUDE_M = 50.0   # generously high, non-binding ceiling -- see
+                             # ranging.py AttackConfig docstring: step_size_m
+                             # (not magnitude_m) controls the actually-
+                             # achieved bias within a finite simulation
 ATTACK_ONSET_CYCLE = 60
 ATTACK_STEP_EVERY = 10      # staircase: +ATTACK_STEP_SIZE_M every this many cycles
-ATTACK_STEP_SIZE_M = 0.05   # individually small -- stays under the single-sample
-                             # gate almost always; CUSUM accumulates the trend
+ATTACK_STEP_SIZE_M = 1.2    # tuned so N=15's formation-control "dilution"
+                             # (each drone sums 14 neighbor springs, not 5)
+                             # still produces comparable physical danger to
+                             # the original N=6 configuration -- see
+                             # compare_n.py and the README for the sweep
+                             # that found this value
 
-# well-spread initial formation, echoing the teaser figure's layout
-INITIAL_POS = np.array([
-    [0.0, 3.0],   # D1
-    [3.2, 4.0],   # D2  <- attacker
-    [6.4, 2.6],   # D3
-    [1.0, 0.0],   # D4
-    [4.2, -0.6],  # D5  <- victim
-    [7.4, 1.0],   # D6
-])
+
+def generate_formation(n: int, spacing: float = 3.0) -> np.ndarray:
+    """
+    Well-spread 2D formation for any N, via a sunflower/Fibonacci disk
+    pattern: guarantees genuine 2D geometry (no accidental collinearity)
+    and even spread, unlike an arbitrary hand-placed layout that only
+    works for one specific N. `spacing` targets the approximate
+    nearest-neighbor distance (m), matching the scale used when this was
+    a fixed 6-drone layout.
+    """
+    golden_angle = np.pi * (3.0 - np.sqrt(5.0))
+    radius_scale = spacing * np.sqrt(n / np.pi)
+    pts = np.zeros((n, 2))
+    for k in range(n):
+        r = radius_scale * np.sqrt((k + 0.5) / n)
+        theta = k * golden_angle
+        pts[k] = [r * np.cos(theta), r * np.sin(theta)]
+    return pts
+
+
+INITIAL_POS = generate_formation(N, spacing=3.0)
+
+# Victim = attacker's nearest neighbor in the generated formation, so the
+# attack always targets a genuinely adjacent drone regardless of N.
+_dists_from_attacker = np.linalg.norm(INITIAL_POS - INITIAL_POS[ATTACKER], axis=1)
+_dists_from_attacker[ATTACKER] = np.inf
+VICTIM = int(np.argmin(_dists_from_attacker))
 
 
 def run():
@@ -237,13 +261,22 @@ def make_plots(res: dict) -> None:
     # ---- Part 1a: trajectories ----
     fig, ax = plt.subplots(figsize=(7, 6))
     labels = [f"D{k+1}" for k in range(N)]
+    other_labeled = False
     for k in range(N):
         traj = res["hist_pos"][:cutoff, k, :]
         color = "#d62728" if k == ATTACKER else ("#1f77b4" if k == VICTIM else "#7f7f7f")
-        ax.plot(traj[:, 0], traj[:, 1], color=color, lw=1.6,
-                label=f"{labels[k]}" + (" (attacker)" if k == ATTACKER else " (victim)" if k == VICTIM else ""))
-        ax.scatter(*traj[0], marker="o", color=color, s=40, zorder=5)
-        ax.scatter(*traj[-1], marker="s", color=color, s=40, zorder=5)
+        if k == ATTACKER:
+            lbl = f"{labels[k]} (attacker)"
+        elif k == VICTIM:
+            lbl = f"{labels[k]} (victim)"
+        else:
+            lbl = "other drones" if not other_labeled else None
+            other_labeled = True
+        lw = 1.8 if k in (ATTACKER, VICTIM) else 0.8
+        alpha = 1.0 if k in (ATTACKER, VICTIM) else 0.6
+        ax.plot(traj[:, 0], traj[:, 1], color=color, lw=lw, alpha=alpha, label=lbl)
+        ax.scatter(*traj[0], marker="o", color=color, s=30, zorder=5)
+        ax.scatter(*traj[-1], marker="s", color=color, s=30, zorder=5)
     ax.set_title("Part 1: ground-truth trajectories under an undefended range-falsification attack\n"
                  "(circles = start, squares = end)")
     ax.set_xlabel("x (m)"); ax.set_ylabel("y (m)")
@@ -273,7 +306,9 @@ def make_plots(res: dict) -> None:
     axes[0].plot(t_full, res["hist_nis_link"], color="#333333", lw=1.0)
     axes[0].axhline(10.83, color="#d62728", ls="--", lw=1.0, label=r"$\chi^2_1$ threshold (p=0.001)")
     axes[0].axvline(onset_t, color="#999999", ls=":", lw=1.0)
-    axes[0].set_ylabel("NIS"); axes[0].set_title("Part 2, Layer 1: instantaneous gate on link (D5 observes D2)")
+    axes[0].set_ylabel("NIS")
+    axes[0].set_title(f"Part 2, Layer 1: instantaneous gate on link "
+                      f"(D{VICTIM+1} observes D{ATTACKER+1})")
     axes[0].legend(fontsize=8)
     axes[1].plot(t_full, res["hist_cplus"], color="#d62728", lw=1.3, label=r"$C^+$ accumulator")
     axes[1].plot(t_full, res["hist_cminus"], color="#1f77b4", lw=1.3, label=r"$C^-$ accumulator")
@@ -289,33 +324,42 @@ def make_plots(res: dict) -> None:
 
     # ---- Part 2b: Layer 2 leave-one-out attribution ----
     fig, ax = plt.subplots(figsize=(8, 4.5))
+    other_labeled = False
     for k in range(N):
-        color = "#d62728" if k == ATTACKER else "#7f7f7f"
-        lw = 2.0 if k == ATTACKER else 1.0
-        ax.plot(t_full, res["hist_delta"][:, k], color=color, lw=lw,
-                label=labels[k] + (" (attacker)" if k == ATTACKER else ""))
+        if k == ATTACKER:
+            ax.plot(t_full, res["hist_delta"][:, k], color="#d62728", lw=2.2,
+                    label=f"{labels[k]} (attacker)", zorder=5)
+        else:
+            ax.plot(t_full, res["hist_delta"][:, k], color="#7f7f7f", lw=0.8, alpha=0.7,
+                    label="other drones" if not other_labeled else None)
+            other_labeled = True
     ax.axvline(onset_t, color="#999999", ls=":", lw=1.0, label="attack onset")
     ax.set_title(r"Part 2, Layer 2: leave-one-out attribution score $\Delta_m$ (Algorithm 2)")
     ax.set_xlabel("time (s)"); ax.set_ylabel(r"$\Delta_m$")
-    ax.legend(fontsize=7, ncol=2)
+    ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(os.path.join(OUT, "part2_layer2.png"), dpi=150)
     plt.close(fig)
 
     # ---- Part 2c: combined evidence E_i(attacker) per observer ----
     fig, ax = plt.subplots(figsize=(8, 4.5))
+    other_labeled = False
     for i in range(N):
         if i == ATTACKER:
             continue
-        color = "#1f77b4" if i == VICTIM else "#7f7f7f"
-        lw = 2.0 if i == VICTIM else 0.9
-        ax.plot(t_full, res["hist_evidence_attacker"][:, i], color=color, lw=lw,
-                label=labels[i] + ("'s view (initiator, Layer 3 available)" if i == VICTIM else "'s view"))
+        if i == VICTIM:
+            ax.plot(t_full, res["hist_evidence_attacker"][:, i], color="#1f77b4", lw=2.2,
+                    label=f"{labels[i]}'s view (initiator, Layer 3 available)", zorder=5)
+        else:
+            ax.plot(t_full, res["hist_evidence_attacker"][:, i], color="#7f7f7f", lw=0.8, alpha=0.7,
+                    label="other drones' view" if not other_labeled else None)
+            other_labeled = True
     ax.axhline(3.0, color="#333333", ls="--", lw=1.0, label=r"declare-compromised threshold $\Theta$")
     ax.axvline(onset_t, color="#999999", ls=":", lw=1.0, label="attack onset")
     dc = res["detection_cycle_per_observer"].get(VICTIM)
     if dc is not None:
-        ax.axvline(dc * DT, color="#2ca02c", ls="-", lw=1.3, label=f"D5 declares D2 compromised (t={dc*DT:.2f}s)")
+        ax.axvline(dc * DT, color="#2ca02c", ls="-", lw=1.3,
+                  label=f"D{VICTIM+1} declares D{ATTACKER+1} compromised (t={dc*DT:.2f}s)")
     ax.set_title(r"Part 2, Sec. 6.4: each drone's local evidence score $E_i(\mathrm{attacker})$")
     ax.set_xlabel("time (s)"); ax.set_ylabel(r"$E_i(j{=}\mathrm{attacker})$")
     ax.legend(fontsize=7)

@@ -1,0 +1,15 @@
+=== N=6 vs N=15: formation-dilution comparison ===
+
+N=6 (step_size=0.5m):
+  Collision at cycle 372 (t=55.80s), min separation reached: 0.82m
+
+N=15 (step_size=1.2m):
+  Collision at cycle 235 (t=35.25s), min separation reached: 0.84m
+
+Takeaway: the same detection/attribution architecture (Sec. 6) scales
+cleanly to more drones with no structural changes. Physical danger from
+a FIXED attack rate does not scale the same way -- larger, more
+connected swarms are more physically robust to a single falsified link
+purely as a byproduct of full-mesh formation control (more honest
+neighbors diluting one liar's influence on the total corrective signal).
+This is a property of the control architecture, not of detection.
