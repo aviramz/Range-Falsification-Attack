@@ -23,7 +23,19 @@ class RelativeRangeEKF:
         self.P = np.diag([init_pos_var, init_pos_var, init_vel_var, init_vel_var])
         self.q = process_noise_q
         self.R = range_noise_std ** 2
-        self.min_range = 1e-3
+        self.min_range = 1e-6  # true numerical-zero guard only (was 1e-3,
+                                 # i.e. 1mm -- far too conservative: for any
+                                 # r_norm > 0, however small, the direction
+                                 # r/r_norm is perfectly well-defined (a
+                                 # unit vector), so skipping at 1mm was
+                                 # needlessly triggering on ordinary close
+                                 # approaches. Worse, skipping means no
+                                 # further correction is ever applied, so a
+                                 # transient dip below threshold could
+                                 # permanently freeze the filter in pure-
+                                 # prediction mode -- exactly the mechanism
+                                 # traced to an unbounded position blowup
+                                 # in one drone's leader-tracking filter
         # last-update diagnostics (Sec. 2.3 / Sec. 6.1)
         self.last_innovation = 0.0
         self.last_innovation_var = 1.0

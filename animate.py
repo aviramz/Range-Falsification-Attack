@@ -34,6 +34,7 @@ TRAIL_CYCLES = 40       # how many past cycles of trail to draw per drone
 
 def build_animation(res: dict) -> None:
     pos = res["hist_pos"]                      # (CYCLES, N, 2)
+    leader_pos = res["hist_leader_pos"]         # (CYCLES, 2)
     min_sep = res["true_min_sep_series"]        # (CYCLES,)
     detect_cycle = res["detection_cycle_per_observer"]
     collision_cycle = res["collision_cycle"]
@@ -67,6 +68,8 @@ def build_animation(res: dict) -> None:
     trail_lines = [ax_map.plot([], [], color=colors[k], lw=1.0, alpha=0.5)[0] for k in range(S.N)]
     dots = [ax_map.plot([], [], "o", color=colors[k], ms=9, mec="black", mew=0.6, zorder=5)[0]
             for k in range(S.N)]
+    leader_trail, = ax_map.plot([], [], color="black", lw=1.3, ls="--", alpha=0.7, zorder=4)
+    leader_dot, = ax_map.plot([], [], "*", color="black", ms=16, mec="black", zorder=6)
     # Drone number labels only for attacker/victims (avoids N overlapping
     # labels at higher N); others are just gray dots per the legend.
     labels_txt = {k: ax_map.text(0, 0, labels[k], fontsize=8, ha="center", va="bottom", zorder=6)
@@ -97,6 +100,8 @@ def build_animation(res: dict) -> None:
         Line2D([0], [0], color="#d62728", lw=2.0, ls=(0, (4, 2)), label="falsified link (active)"),
         Line2D([0], [0], marker="o", color="w", markerfacecolor="none",
                markeredgecolor="#2ca02c", mew=1.8, label="declared compromised", ms=10),
+        Line2D([0], [0], marker="*", color="black", lw=1.3, ls="--",
+               label="leader (scripted route, not part of the simulation)", ms=12),
     ]
     ax_map.legend(handles=legend_elems, fontsize=7.5, loc="upper right")
 
@@ -121,7 +126,9 @@ def build_animation(res: dict) -> None:
             r.set_data([], [])
         for link in attack_links.values():
             link.set_data([], [])
-        return trail_lines + dots + list(attack_links.values())
+        leader_trail.set_data([], [])
+        leader_dot.set_data([], [])
+        return trail_lines + dots + list(attack_links.values()) + [leader_trail, leader_dot]
 
     n_others = S.N - 1  # everyone except the attacker
 
@@ -144,11 +151,16 @@ def build_animation(res: dict) -> None:
         for k, txt in labels_txt.items():
             txt.set_position((pos[cycle, k, 0], pos[cycle, k, 1] + 0.6))
 
-        # Chase camera: recenter on the swarm's current bounding box each
-        # frame, with generous padding, rather than a fixed view sized to
-        # the whole (possibly far-drifting) trajectory. Keeps the actual
-        # formation readable regardless of how far the centroid has moved.
-        cur = pos[cycle]
+        leader_traj = leader_pos[trail_start:cycle + 1]
+        leader_trail.set_data(leader_traj[:, 0], leader_traj[:, 1])
+        leader_dot.set_data([leader_pos[cycle, 0]], [leader_pos[cycle, 1]])
+
+        # Chase camera: recenter on the swarm's (+ leader's) current
+        # bounding box each frame, with generous padding, rather than a
+        # fixed view sized to the whole (possibly far-drifting) trajectory.
+        # Keeps the actual formation readable regardless of how far the
+        # centroid has moved.
+        cur = np.vstack([pos[cycle], leader_pos[cycle]])
         cx_min, cy_min = cur.min(axis=0)
         cx_max, cy_max = cur.max(axis=0)
         span = max(cx_max - cx_min, cy_max - cy_min, 1.0)
@@ -184,7 +196,8 @@ def build_animation(res: dict) -> None:
         time_marker.set_xdata([t, t])
 
         return (trail_lines + dots + list(labels_txt.values())
-                + list(attack_links.values()) + [title_map, time_marker, detect_counter]
+                + list(attack_links.values()) + [title_map, time_marker, detect_counter,
+                                                   leader_trail, leader_dot]
                 + list(detect_rings.values()))
 
     anim = animation.FuncAnimation(fig, frame_update, frames=frame_cycles, init_func=init,

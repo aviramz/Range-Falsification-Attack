@@ -38,19 +38,20 @@ class SwarmState:
                 d = min(d, np.linalg.norm(self.pos[j] - self.pos[i]))
         return d
 
-    def step(self, accel: np.ndarray, dt: float, drag: float = 0.15) -> None:
+    def step(self, accel: np.ndarray, dt: float) -> None:
         """
-        Integrate one control cycle under commanded accel (n,2), plus light
-        aerodynamic drag (-drag * v). Drag requires no absolute position
-        reference (consistent with GNSS-denied operation) and simply
-        prevents the whole formation's centroid from drifting without
-        bound, since a purely relative-spring formation controller has no
-        anchor on absolute position or heading. This is a physical
-        modeling choice, not part of the paper's control-architecture
-        claims.
+        Integrate one control cycle under commanded accel (n,2).
+
+        No artificial drag/damping here: earlier versions of this
+        simulation added light drag (-k*v) to stop the swarm's centroid
+        from drifting unboundedly, since pure peer-to-peer relative
+        formation control has no absolute anchor. That is no longer
+        needed now that guidance targets a leader moving along a real
+        route (see simulate.py) -- an actual anchor, not a numerical
+        patch -- and drag would actively fight against legitimately
+        matching the leader's nonzero velocity.
         """
-        total_accel = accel - drag * self.vel
-        self.vel += total_accel * dt
+        self.vel += accel * dt
         self.pos += self.vel * dt
 
 

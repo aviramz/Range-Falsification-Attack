@@ -1,14 +1,24 @@
 """
 compare_n.py
 ============
-NOTE: this script was built when physical collision danger was still part
-of what this simulation demonstrated (see README history). That is no
-longer the focus -- the simulation now targets detection and attribution
-only (Sec. 6), with random/multi-victim attacks (see simulate.py). This
-script is kept for the N-scaling comparison it still validly shows (the
-detection architecture needs zero changes to scale from 6 to 15 drones),
-but its per-N attack tuning is calibrated for the collision outcome it was
-originally built to demonstrate, not for the current default scenario.
+NOTE (updated): this script was originally built to compare physical
+collision danger at different swarm sizes, back when motion was driven by
+peer-to-peer formation springs susceptible to a falsified estimate (see
+git history). Motion is now driven ENTIRELY by leader-following (see
+simulate.py) -- the attacker's lies can never influence real physical
+motion, by construction, regardless of N or attack rate. Collisions can
+no longer occur at all under this architecture; running this script will
+show "No collision" and identical minimum separation for every
+configuration, since separation now depends only on the (attack-
+independent) formation spacing, not on N or the attack.
+
+The ONE thing this script still validly demonstrates: detection timing is
+independent of N -- same layers, same code, same ~10-12s time-to-detect
+regardless of swarm size, because detection (Sec. 6) was never coupled to
+physical motion in the first place. Kept for that comparison; the
+collision-outcome framing below is intentionally left as-is (rather than
+rewritten) so the git history honestly shows what changed and why, per
+this project's own stated practice of not quietly rewriting past findings.
 
 Runs the same attack scenario at N=6 and N=15 side by side, into separate
 output folders, to show the "dilution" effect discovered while scaling this
@@ -84,12 +94,16 @@ def main():
 
     lines.append(
         "Takeaway: the same detection/attribution architecture (Sec. 6) scales\n"
-        "cleanly to more drones with no structural changes. Physical danger from\n"
-        "a FIXED attack rate does not scale the same way -- larger, more\n"
-        "connected swarms are more physically robust to a single falsified link\n"
-        "purely as a byproduct of full-mesh formation control (more honest\n"
-        "neighbors diluting one liar's influence on the total corrective signal).\n"
-        "This is a property of the control architecture, not of detection."
+        "cleanly to more drones with no structural changes -- detection timing\n"
+        "above is essentially identical at N=6 and N=15. Collisions no longer\n"
+        "occur at any N or attack rate: motion is now driven entirely by\n"
+        "leader-following (see simulate.py), so the attacker's lies never\n"
+        "influence real physical motion, by construction. (An earlier version\n"
+        "of this script, when motion was still driven by peer-to-peer\n"
+        "formation springs, found that larger/more-connected swarms diluted a\n"
+        "single liar's influence -- that finding no longer applies now that\n"
+        "peer estimates don't drive motion at all; see this script's module\n"
+        "docstring.)"
     )
     text = "\n".join(lines)
     print("\n" + text)

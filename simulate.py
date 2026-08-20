@@ -37,7 +37,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from model import SwarmState, FormationGuidance, CollisionSafetyFilter
+from model import SwarmState
 from ekf import RelativeRangeEKF
 from ranging import AttackConfig, RangingCycle
 from detection import PerLinkGate, leave_one_out_scores, layer3_check, EvidenceTracker
@@ -64,16 +64,53 @@ SAFETY_ALPHA = 2.5
 
 ATTACKER = 1   # index into the generated formation (see generate_formation below)
 ATTACK_DIRECTION = "enlarge"
-ATTACK_MAGNITUDE_M = 50.0   # generously high, non-binding ceiling -- see
-                             # ranging.py AttackConfig docstring: step_size_m
-                             # (not magnitude_m) controls the actually-
-                             # achieved bias within a finite simulation
+ATTACK_MAGNITUDE_M = 3.0    # a real, binding ceiling now (not the old
+                             # "non-binding" placeholder from when large
+                             # sustained bias was needed to force a
+                             # collision): detection (Sec. 6) triggers
+                             # easily from a modest, bounded lie, and an
+                             # unbounded 40+ m bias was causing the
+                             # directly-affected drones to fly off in
+                             # unrealistic excursions -- unnecessary now
+                             # that physical danger is not the point
 ATTACK_ONSET_CYCLE = 60
 ATTACK_STEP_EVERY = 10      # staircase: +ATTACK_STEP_SIZE_M every this many cycles
 ATTACK_STEP_SIZE_M = 1.2
 N_VICTIMS = 3                # attacker falsifies its reported range to this
                              # many other drones simultaneously, each an
                              # independent falsified link
+
+# ---- Leader (does not participate in the simulation at all -- Sec. n/a) ----
+# The leader is not one of the N drones: it never ranges as part of the
+# N(N-1) mesh, is never a possible attacker or victim, and is invisible to
+# every detection layer. It exists purely to give the swarm a real,
+# deliberate reference to follow -- each drone ranges to it separately
+# (noisy, like any other range) and additionally corrects toward its
+# nominal offset from the leader. This also fixes an unrelated cosmetic
+# issue: without any absolute anchor, the swarm's centroid does a slow
+# random walk driven by measurement noise (a known property of purely
+# relative formation control, see "Known simplifications" in the README).
+# A leader moving at constant velocity gives every drone a true, deliberate
+# common reference, replacing that noise-driven drift with smooth,
+# purposeful motion.
+LEADER_START = np.array([0.0, 0.0])
+LEADER_VELOCITY = np.array([1.5, 1.0])  # constant velocity (m/s) -- zero
+                                          # acceleration by construction
+LEADER_KP, LEADER_KD = 2.5, 6.0  # KD >= 2*sqrt(KP) (~3.16 here) for
+                                   # critical/over-damping; the previous
+                                   # KP=KD=2.5 was underdamped, and at
+                                   # DT=0.15s that discretization could
+                                   # grow into a visible oscillation for
+                                   # some drones' specific geometry even
+                                   # with no attack involved at all
+LEADER_ACCEL_LIMIT = 4.0  # m/s^2, hard saturation -- see comment at
+                            # leader_accel_i below
+
+
+def leader_position(cycle: int) -> np.ndarray:
+    """Leader's true position: a straight line at constant velocity (zero
+    acceleration). Not affected by anything in the simulation."""
+    return LEADER_START + LEADER_VELOCITY * (cycle * DT)
 
 
 def generate_formation(n: int, spacing: float = 3.0) -> np.ndarray:
@@ -115,14 +152,11 @@ def run():
     rng = np.random.default_rng(RNG_SEED)
     swarm = SwarmState(INITIAL_POS)
 
-    nominal_offsets = {}
-    for i in range(N):
-        for j in range(N):
-            if i != j:
-                nominal_offsets[(i, j)] = INITIAL_POS[j] - INITIAL_POS[i]
-
-    guidance = FormationGuidance(nominal_offsets, kp=KP, kd=KD, accel_limit=A_LIMIT)
-    safety = CollisionSafetyFilter(d_min=D_MIN, alpha=SAFETY_ALPHA)
+    # NOTE: peer-to-peer FormationGuidance and CollisionSafetyFilter
+    # (Sec. 5.2's original formation spring and collision-avoidance net)
+    # are intentionally NOT used to drive motion -- see the comment at the
+    # leader-only guidance block below. Motion depends solely on each
+    # drone's own leader-tracking EKF.
 
     # Each drone maintains one relative-state EKF per neighbor (Sec. 2.3 / 5.2).
     ekfs: dict[tuple[int, int], RelativeRangeEKF] = {}
@@ -135,6 +169,28 @@ def run():
                     process_noise_q=PROCESS_NOISE_Q, range_noise_std=SIGMA_RANGE,
                 )
 
+    # --- Leader tracking: does not count in the simulation at all (never
+    # touched by Layer 1/2/3 or evidence accumulation, never appears in the
+    # N(N-1) ranging matrix, never eligible as attacker or victim).
+    #
+    # IMPORTANT: this does NOT reuse the range-only RelativeRangeEKF used
+    # for peer tracking. That was tried first and found, by direct
+    # inspection, to suffer a textbook range-only bearing ambiguity: with
+    # only a scalar distance (no bearing) and no bounds on how close the
+    # true relative position could pass to zero, the filter would
+    # occasionally lock onto the wrong direction once distance shrank
+    # toward zero and grew again on the "other side" -- a well-known
+    # failure mode of scalar-range tracking, not fixable by gain tuning
+    # (verified: gain sweeps and output saturation did not fix it, only
+    # bounded the resulting blowup). Since the leader explicitly does not
+    # count in the simulation at all, there is no reason to route this
+    # auxiliary, non-adversarial control channel through the same noisy,
+    # ambiguity-prone estimator used for the (attackable, detection-
+    # relevant) peer links. Direct PD control on true position/velocity
+    # error to a scripted target is unconditionally stable and has no
+    # such ambiguity, and does not touch anything detection depends on.
+    leader_nominal_offset = {i: INITIAL_POS[i] - LEADER_START for i in range(N)}
+
     attack = AttackConfig(ATTACKER, VICTIMS, ATTACK_DIRECTION, ATTACK_MAGNITUDE_M,
                            ATTACK_ONSET_CYCLE, ATTACK_STEP_EVERY, ATTACK_STEP_SIZE_M)
 
@@ -144,6 +200,7 @@ def run():
 
     # ---- History for plotting ----
     hist_pos = np.zeros((CYCLES, N, 2))
+    hist_leader_pos = np.zeros((CYCLES, 2))
     hist_true_dist = np.zeros((CYCLES, N, N))
     hist_nis_link = np.zeros(CYCLES)          # representative victim's EKF-for-attacker
     hist_cplus = np.zeros(CYCLES)
@@ -158,6 +215,7 @@ def run():
 
     for c in range(CYCLES):
         cyc = RangingCycle(swarm, SIGMA_RANGE, rng, attack, c)
+        leader_true_pos = leader_position(c)
 
         # --- EKF predict+update for every ordered pair (i observes j) ---
         # accelerations realized last step are shared (only RANGE is attacked,
@@ -182,14 +240,23 @@ def run():
                 gate = layer1_gates[(i, j)]
                 gate.update(ek.last_nis, ek.standardized_innovation)
 
-        # --- Formation guidance + collision-safety filter (Sec. 5.2) ---
+        # --- Leader-following: direct PD control on TRUE position/velocity
+        # error to the scripted target (leader_true_pos + nominal offset),
+        # with the leader's true constant velocity as the target velocity.
+        # No estimator in this loop at all -- see the module-level comment
+        # above for why. Detection (Sec. 6) is entirely unaffected: it
+        # still runs on the full peer EKFs/ranging exactly as before,
+        # independent of what drives physical motion.
         accel = np.zeros((N, 2))
-        neighbors_all = [k for k in range(N)]
         for i in range(N):
-            neighbors = [j for j in neighbors_all if j != i]
-            a_des = guidance.desired_accel(i, neighbors, estimates[i])
-            a_safe = safety.filter(a_des, neighbors, estimates[i])
-            accel[i] = a_safe
+            target_pos = leader_true_pos + leader_nominal_offset[i]
+            pos_error = target_pos - swarm.pos[i]
+            vel_error = LEADER_VELOCITY - swarm.vel[i]
+            a = LEADER_KP * pos_error + LEADER_KD * vel_error
+            a_norm = np.linalg.norm(a)
+            if a_norm > LEADER_ACCEL_LIMIT:
+                a = a * (LEADER_ACCEL_LIMIT / a_norm)
+            accel[i] = a
         swarm._last_accel = accel
         swarm.step(accel, DT)
 
@@ -238,6 +305,7 @@ def run():
 
         # --- bookkeeping ---
         hist_pos[c] = swarm.pos
+        hist_leader_pos[c] = leader_true_pos
         for i in range(N):
             for j in range(N):
                 hist_true_dist[c, i, j] = np.linalg.norm(swarm.pos[j] - swarm.pos[i]) if i != j else 0.0
@@ -253,7 +321,8 @@ def run():
             collision_cycle = c
 
     return dict(
-        hist_pos=hist_pos, hist_true_dist=hist_true_dist, hist_nis_link=hist_nis_link,
+        hist_pos=hist_pos, hist_leader_pos=hist_leader_pos,
+        hist_true_dist=hist_true_dist, hist_nis_link=hist_nis_link,
         hist_cplus=hist_cplus, hist_cminus=hist_cminus, hist_delta=hist_delta,
         hist_evidence_attacker=hist_evidence_attacker, hist_layer3_flag=hist_layer3_flag,
         hist_n_detected=hist_n_detected,
@@ -306,8 +375,12 @@ def make_plots(res: dict) -> None:
         ax.plot(traj[:, 0], traj[:, 1], color=color, lw=lw, alpha=alpha, label=lbl)
         ax.scatter(*traj[0], marker="o", color=color, s=30, zorder=5)
         ax.scatter(*traj[-1], marker="s", color=color, s=30, zorder=5)
+    leader_traj = res["hist_leader_pos"][:cutoff]
+    ax.plot(leader_traj[:, 0], leader_traj[:, 1], color="black", lw=1.5, ls="--", zorder=6, label="leader")
+    ax.scatter(*leader_traj[0], marker="*", color="black", s=120, zorder=7)
+    ax.scatter(*leader_traj[-1], marker="*", color="black", s=120, zorder=7)
     ax.set_title("Part 1: ground-truth trajectories under an undefended range-falsification attack\n"
-                 "(circles = start, squares = end)")
+                 "(circles = start, squares/star = end)")
     ax.set_xlabel("x (m)"); ax.set_ylabel("y (m)")
     ax.legend(fontsize=8, loc="best")
     ax.set_aspect("equal")
