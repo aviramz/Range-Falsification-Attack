@@ -5,25 +5,30 @@ Orchestrates the full simulation described to the user:
 
   1. n drones organized in a fixed 2D formation (a well-spread sunflower/
      Fibonacci disk layout, scalable to any N -- see generate_formation()).
-     The attacker and its nearest-neighbor victim are chosen automatically.
+     The attacker is fixed; its victims are chosen at random (reproducibly,
+     via a seeded generator) and it falsifies its reported range to all of
+     them simultaneously (see N_VICTIMS below).
   2. Ranging + EKF + formation guidance + collision-safety filter run
      every cycle exactly as in the paper's pipeline (Sec. 5.2). No
      mitigation is applied to a flagged link -- consistent with the
      paper's explicit scope (Sec. 3): detection and attribution only,
-     response is out of scope. This lets Part 1 show what an
-     undefended swarm actually suffers.
+     response is out of scope. Physical danger (Part 1) is retained for
+     context but is no longer the focus of this simulation -- detection
+     and attribution (Part 2) is.
   3. In parallel (not causally affecting the physics), every layer of
      the detection architecture (Sec. 6) observes the same ranging
-     stream and produces its diagnostics -- Part 2.
+     stream and produces its diagnostics -- Part 2, including how many
+     of the N-1 other drones have independently detected and identified
+     the attacker.
 
 Outputs (written to ./outputs/):
-  part1_trajectories.png   - ground-truth flight paths
-  part1_min_separation.png - true distance on every pair vs. time,
-                             collision threshold, detection-time marker
-  part2_layer1.png         - NIS and two-sided CUSUM on the attacked link
-  part2_layer2.png         - Layer-2 leave-one-out attribution score per node
-  part2_evidence.png       - combined per-neighbor evidence E_i(j) (Sec. 6.4)
-  summary.txt              - key numbers (time-to-collision, time-to-detect, ...)
+  part1_trajectories.png     - ground-truth flight paths
+  part1_min_separation.png   - true distance on every pair vs. time
+  part2_layer1.png           - NIS and two-sided CUSUM on a representative victim's link
+  part2_layer2.png           - Layer-2 leave-one-out attribution score per node
+  part2_evidence.png         - combined per-neighbor evidence E_i(j) (Sec. 6.4)
+  part2_detection_count.png  - number of drones that have identified the attacker, over time
+  summary.txt                - key numbers, including final detection count
 """
 from __future__ import annotations
 import os
@@ -65,12 +70,10 @@ ATTACK_MAGNITUDE_M = 50.0   # generously high, non-binding ceiling -- see
                              # achieved bias within a finite simulation
 ATTACK_ONSET_CYCLE = 60
 ATTACK_STEP_EVERY = 10      # staircase: +ATTACK_STEP_SIZE_M every this many cycles
-ATTACK_STEP_SIZE_M = 1.2    # tuned so N=15's formation-control "dilution"
-                             # (each drone sums 14 neighbor springs, not 5)
-                             # still produces comparable physical danger to
-                             # the original N=6 configuration -- see
-                             # compare_n.py and the README for the sweep
-                             # that found this value
+ATTACK_STEP_SIZE_M = 1.2
+N_VICTIMS = 3                # attacker falsifies its reported range to this
+                             # many other drones simultaneously, each an
+                             # independent falsified link
 
 
 def generate_formation(n: int, spacing: float = 3.0) -> np.ndarray:
@@ -92,13 +95,20 @@ def generate_formation(n: int, spacing: float = 3.0) -> np.ndarray:
     return pts
 
 
-INITIAL_POS = generate_formation(N, spacing=3.0)
+INITIAL_POS = generate_formation(N, spacing=6.0)
 
-# Victim = attacker's nearest neighbor in the generated formation, so the
-# attack always targets a genuinely adjacent drone regardless of N.
-_dists_from_attacker = np.linalg.norm(INITIAL_POS - INITIAL_POS[ATTACKER], axis=1)
-_dists_from_attacker[ATTACKER] = np.inf
-VICTIM = int(np.argmin(_dists_from_attacker))
+# Victims are chosen at random from a dedicated, seeded generator (kept
+# separate from the ranging-noise generator inside run(), so victim
+# selection is reproducible independent of anything else). Not restricted
+# to nearest neighbors -- a real attacker has no reason to prefer them,
+# and physical danger is no longer the point of this simulation (see
+# README): the question here is purely whether the swarm detects and
+# identifies a compromised drone, regardless of which links it targets.
+_victim_rng = np.random.default_rng(RNG_SEED)
+VICTIMS = sorted(_victim_rng.choice(
+    [i for i in range(N) if i != ATTACKER], size=N_VICTIMS, replace=False
+).tolist())
+VICTIM = VICTIMS[0]  # representative victim, used for single-link illustrative plots
 
 
 def run():
@@ -125,7 +135,7 @@ def run():
                     process_noise_q=PROCESS_NOISE_Q, range_noise_std=SIGMA_RANGE,
                 )
 
-    attack = AttackConfig(ATTACKER, [VICTIM], ATTACK_DIRECTION, ATTACK_MAGNITUDE_M,
+    attack = AttackConfig(ATTACKER, VICTIMS, ATTACK_DIRECTION, ATTACK_MAGNITUDE_M,
                            ATTACK_ONSET_CYCLE, ATTACK_STEP_EVERY, ATTACK_STEP_SIZE_M)
 
     # ---- Detection state (Sec. 6) ----
@@ -135,12 +145,13 @@ def run():
     # ---- History for plotting ----
     hist_pos = np.zeros((CYCLES, N, 2))
     hist_true_dist = np.zeros((CYCLES, N, N))
-    hist_nis_link = np.zeros(CYCLES)          # victim's EKF-for-attacker
+    hist_nis_link = np.zeros(CYCLES)          # representative victim's EKF-for-attacker
     hist_cplus = np.zeros(CYCLES)
     hist_cminus = np.zeros(CYCLES)
     hist_delta = np.zeros((CYCLES, N))        # Layer-2 leave-one-out score per node
     hist_evidence_attacker = np.zeros((CYCLES, N))  # E_i(attacker) for every observer i
-    hist_layer3_flag = np.zeros(CYCLES, dtype=bool)
+    hist_layer3_flag = np.zeros(CYCLES, dtype=bool)  # representative victim's link only
+    hist_n_detected = np.zeros(CYCLES, dtype=int)    # how many observers have detected, by this cycle
     detection_cycle_per_observer = {i: None for i in range(N) if i != ATTACKER}
     true_min_sep_series = np.zeros(CYCLES)
     collision_cycle = None
@@ -189,14 +200,25 @@ def run():
                 D[i, j] = D[j, i] = cyc.get(i, j)
         deltas = leave_one_out_scores(D)
 
-        # --- Layer 3 (Sec. 6.3): checked on the attacked pair whenever attacker responds ---
-        l3_flag = False
-        recompute = cyc.get_layer3(min(ATTACKER, VICTIM), max(ATTACKER, VICTIM))
-        if recompute is not None:
-            reported = cyc.get(ATTACKER, VICTIM)
-            l3_flag = layer3_check(reported, recompute)
+        # --- Layer 3 (Sec. 6.3): checked independently for EVERY drone that
+        # ranged against the attacker this cycle, not just one hardcoded pair
+        # -- generalizes cleanly to any number of simultaneously falsified
+        # links, since cyc.get_layer3 is populated for every pair the
+        # attacker is a party to (see ranging.py), and naturally reports no
+        # mismatch on pairs that were not actually falsified this cycle. ---
+        l3_flag_per_observer: dict[int, bool] = {}
+        for i in range(N):
+            if i == ATTACKER:
+                continue
+            recompute = cyc.get_layer3(min(i, ATTACKER), max(i, ATTACKER))
+            if recompute is not None:
+                reported = cyc.get(i, ATTACKER)
+                l3_flag_per_observer[i] = layer3_check(reported, recompute)
+            else:
+                l3_flag_per_observer[i] = False
 
         # --- Sec. 6.4: combine into each observer's local evidence about the attacker ---
+        n_detected_this_cycle = 0
         for i in range(N):
             if i == ATTACKER:
                 continue
@@ -205,11 +227,14 @@ def run():
                 ATTACKER,
                 layer1_alarm=gate.sequential_flag,
                 delta_j=deltas[ATTACKER],
-                layer3_flag=l3_flag if i == VICTIM else False,
+                layer3_flag=l3_flag_per_observer[i],
             )
             hist_evidence_attacker[c, i] = evidence[i].E[ATTACKER]
             if detection_cycle_per_observer[i] is None and ATTACKER in evidence[i].declared_compromised:
                 detection_cycle_per_observer[i] = c
+            if ATTACKER in evidence[i].declared_compromised:
+                n_detected_this_cycle += 1
+        hist_n_detected[c] = n_detected_this_cycle
 
         # --- bookkeeping ---
         hist_pos[c] = swarm.pos
@@ -221,7 +246,7 @@ def run():
         hist_cplus[c] = g.C_plus
         hist_cminus[c] = g.C_minus
         hist_delta[c] = deltas
-        hist_layer3_flag[c] = l3_flag
+        hist_layer3_flag[c] = l3_flag_per_observer.get(VICTIM, False)
         min_sep = swarm.min_pairwise_distance()
         true_min_sep_series[c] = min_sep
         if collision_cycle is None and min_sep < D_MIN:
@@ -231,6 +256,7 @@ def run():
         hist_pos=hist_pos, hist_true_dist=hist_true_dist, hist_nis_link=hist_nis_link,
         hist_cplus=hist_cplus, hist_cminus=hist_cminus, hist_delta=hist_delta,
         hist_evidence_attacker=hist_evidence_attacker, hist_layer3_flag=hist_layer3_flag,
+        hist_n_detected=hist_n_detected,
         detection_cycle_per_observer=detection_cycle_per_observer,
         true_min_sep_series=true_min_sep_series, collision_cycle=collision_cycle,
         attack=attack,
@@ -262,18 +288,21 @@ def make_plots(res: dict) -> None:
     fig, ax = plt.subplots(figsize=(7, 6))
     labels = [f"D{k+1}" for k in range(N)]
     other_labeled = False
+    victim_labeled = False
     for k in range(N):
         traj = res["hist_pos"][:cutoff, k, :]
-        color = "#d62728" if k == ATTACKER else ("#1f77b4" if k == VICTIM else "#7f7f7f")
         if k == ATTACKER:
-            lbl = f"{labels[k]} (attacker)"
-        elif k == VICTIM:
-            lbl = f"{labels[k]} (victim)"
+            color, lbl = "#d62728", f"{labels[k]} (attacker)"
+        elif k in VICTIMS:
+            color = "#1f77b4"
+            lbl = ("victims: " + ", ".join(labels[v] for v in VICTIMS)) if not victim_labeled else None
+            victim_labeled = True
         else:
+            color = "#7f7f7f"
             lbl = "other drones" if not other_labeled else None
             other_labeled = True
-        lw = 1.8 if k in (ATTACKER, VICTIM) else 0.8
-        alpha = 1.0 if k in (ATTACKER, VICTIM) else 0.6
+        lw = 1.8 if k in (ATTACKER, *VICTIMS) else 0.8
+        alpha = 1.0 if k in (ATTACKER, *VICTIMS) else 0.6
         ax.plot(traj[:, 0], traj[:, 1], color=color, lw=lw, alpha=alpha, label=lbl)
         ax.scatter(*traj[0], marker="o", color=color, s=30, zorder=5)
         ax.scatter(*traj[-1], marker="s", color=color, s=30, zorder=5)
@@ -344,12 +373,14 @@ def make_plots(res: dict) -> None:
     # ---- Part 2c: combined evidence E_i(attacker) per observer ----
     fig, ax = plt.subplots(figsize=(8, 4.5))
     other_labeled = False
+    victim_labeled = False
     for i in range(N):
         if i == ATTACKER:
             continue
-        if i == VICTIM:
-            ax.plot(t_full, res["hist_evidence_attacker"][:, i], color="#1f77b4", lw=2.2,
-                    label=f"{labels[i]}'s view (initiator, Layer 3 available)", zorder=5)
+        if i in VICTIMS:
+            ax.plot(t_full, res["hist_evidence_attacker"][:, i], color="#1f77b4", lw=2.0,
+                    label="victims' view (Layer 3 available)" if not victim_labeled else None, zorder=5)
+            victim_labeled = True
         else:
             ax.plot(t_full, res["hist_evidence_attacker"][:, i], color="#7f7f7f", lw=0.8, alpha=0.7,
                     label="other drones' view" if not other_labeled else None)
@@ -359,7 +390,7 @@ def make_plots(res: dict) -> None:
     dc = res["detection_cycle_per_observer"].get(VICTIM)
     if dc is not None:
         ax.axvline(dc * DT, color="#2ca02c", ls="-", lw=1.3,
-                  label=f"D{VICTIM+1} declares D{ATTACKER+1} compromised (t={dc*DT:.2f}s)")
+                  label=f"D{VICTIM+1} (a victim) declares D{ATTACKER+1} compromised (t={dc*DT:.2f}s)")
     ax.set_title(r"Part 2, Sec. 6.4: each drone's local evidence score $E_i(\mathrm{attacker})$")
     ax.set_xlabel("time (s)"); ax.set_ylabel(r"$E_i(j{=}\mathrm{attacker})$")
     ax.legend(fontsize=7)
@@ -367,10 +398,24 @@ def make_plots(res: dict) -> None:
     fig.savefig(os.path.join(OUT, "part2_evidence.png"), dpi=150)
     plt.close(fig)
 
+    # ---- Part 2d: how many drones have detected AND identified the attacker ----
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    n_others = N - 1
+    ax.plot(t_full, res["hist_n_detected"], color="#2ca02c", lw=2.0, drawstyle="steps-post")
+    ax.axhline(n_others, color="#999999", ls="--", lw=1.0, label=f"all {n_others} other drones")
+    ax.axvline(onset_t, color="#999999", ls=":", lw=1.0, label="attack onset")
+    ax.set_ylim(-0.5, n_others + 1)
+    ax.set_title(f"Part 2: number of drones that have identified D{ATTACKER+1} as compromised")
+    ax.set_xlabel("time (s)"); ax.set_ylabel("drones that have declared the attacker compromised")
+    ax.legend(fontsize=8, loc="lower right")
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "part2_detection_count.png"), dpi=150)
+    plt.close(fig)
+
 
 def write_summary(res: dict) -> None:
     lines = []
-    lines.append("=== Baseline outcome (no mitigation, Sec. 3 scope) ===")
+    lines.append("=== Baseline outcome (no mitigation, Sec. 3 scope; physical danger not the focus) ===")
     if res["collision_cycle"] is not None:
         lines.append(f"Collision threshold ({D_MIN} m) crossed at cycle {res['collision_cycle']} "
                       f"(t = {res['collision_cycle']*DT:.2f}s)")
@@ -379,14 +424,22 @@ def write_summary(res: dict) -> None:
                       f"(min separation reached: {res['true_min_sep_series'].min():.2f} m)")
     lines.append("")
     lines.append("=== Detection outcome (Sec. 6) ===")
-    for i, c in res["detection_cycle_per_observer"].items():
-        label = f"D{i+1}"
-        if c is None:
-            lines.append(f"  {label}: never declared D{ATTACKER+1} compromised in {CYCLES} cycles")
-        else:
-            lines.append(f"  {label}: declared D{ATTACKER+1} compromised at cycle {c} (t = {c*DT:.2f}s)")
+    n_others = N - 1
+    n_ever_detected = sum(1 for c in res["detection_cycle_per_observer"].values() if c is not None)
+    lines.append(f"{n_ever_detected} / {n_others} other drones detected and identified "
+                 f"D{ATTACKER+1} as the compromised drone by the end of the simulation.")
     lines.append("")
-    lines.append(f"Attack: D{ATTACKER+1} -> D{VICTIM+1}, {ATTACK_DIRECTION} by {ATTACK_MAGNITUDE_M} m, "
+    for i, c in sorted(res["detection_cycle_per_observer"].items(), key=lambda kv: (kv[1] is None, kv[1])):
+        label = f"D{i+1}"
+        tag = " (victim)" if i in VICTIMS else ""
+        if c is None:
+            lines.append(f"  {label}{tag}: never declared D{ATTACKER+1} compromised in {CYCLES} cycles")
+        else:
+            lines.append(f"  {label}{tag}: declared D{ATTACKER+1} compromised at cycle {c} (t = {c*DT:.2f}s)")
+    lines.append("")
+    victim_labels = ", ".join(f"D{v+1}" for v in VICTIMS)
+    lines.append(f"Attack: D{ATTACKER+1} -> {{{victim_labels}}} ({len(VICTIMS)} simultaneously "
+                 f"falsified links), {ATTACK_DIRECTION} by {ATTACK_MAGNITUDE_M} m, "
                  f"onset cycle {ATTACK_ONSET_CYCLE}, staircase +{ATTACK_STEP_SIZE_M} m every "
                  f"{ATTACK_STEP_EVERY} cycles ({ATTACK_STEP_EVERY*DT:.1f}s per step)")
     text = "\n".join(lines)

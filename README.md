@@ -2,13 +2,17 @@
 
 A Python simulation of the system architecture from the paper
 *"Distributed Detection and Attribution of Range-Falsification Attacks in
-GNSS-Denied UWB Drone Swarms"* — built to answer two questions concretely:
+GNSS-Denied UWB Drone Swarms"*.
 
-1. **Without any detection/mitigation, what does a range-falsification
-   attack actually do to the swarm?** (Sec. 3 threat model, Sec. 5.2 pipeline)
-2. **How does the swarm's proposed detection architecture catch and
-   attribute the attack?** (Sec. 6, all three layers + the Sec. 6.4
-   local evidence combination)
+**Current focus: detection and attribution only** (Sec. 6) — does the
+swarm detect that a range-falsification attack is happening, and does it
+correctly identify the compromised drone? Physical consequences (whether a
+falsified range leads to a collision) were an earlier focus of this
+simulation and are retained for context (Part 1 plots), but are no longer
+the point; no physical-danger tuning is maintained going forward. The
+attacker may falsify its reported range to more than one victim
+simultaneously, and victims are chosen at random (reproducibly) rather
+than fixed by hand.
 
 ## Running it
 
@@ -24,28 +28,43 @@ the numbers in the table below. Produces `outputs/part1_*.png`,
 
 `animate.py` re-runs the same deterministic scenario and renders it as an
 animation (`outputs/swarm_animation.mp4` and `.gif`): drones flying in
-formation, the falsified link highlighted in red once the attack starts, a
-live green checkmark next to each drone the moment it independently
-declares D2 compromised, and a synchronized safety-margin panel showing the
-true minimum separation and collision threshold. The MP4 requires ffmpeg on
-your PATH; the GIF only needs Pillow (already in `requirements.txt`) and is
-produced either way.
+formation, the falsified links highlighted in red once the attack starts
+(one per victim), a green ring around each drone's dot the moment it
+independently declares D2 compromised (a single aggregate counter is used
+instead of per-drone text, since N individual labels overlap illegibly at
+higher N), and a synchronized safety-margin panel. The MP4 requires ffmpeg
+on your PATH; the GIF only needs Pillow (already in `requirements.txt`)
+and is produced either way.
 
 ![Swarm range-falsification attack: detection and attribution](outputs/swarm_animation.gif)
 
-`compare_n.py` runs the same scenario at N=6 and N=15 side by side (see
-"Scaling to more drones" below) into `outputs/n06/` and `outputs/n15/`.
+**Configuring the attack** (`simulate.py`): `N_VICTIMS` sets how many
+drones the attacker simultaneously falsifies its reported range to (victims
+are chosen at random from a seeded generator, reproducible but not fixed
+by hand). `part2_detection_count.png` plots directly the thing this is
+built to answer: how many of the N-1 other drones have, by each point in
+time, independently detected and correctly identified the attacker.
+`summary.txt` also states this as a single explicit count
+("X / N-1 other drones detected and identified the attacker").
+
+`compare_n.py` runs an earlier, collision-focused version of this scenario
+at N=6 and N=15 side by side (see "Scaling to more drones" below). It
+predates the shift to detection-only and still uses single, nearest-
+neighbor victim selection rather than the random multi-victim default
+described above — kept because the N-scaling finding it demonstrates
+(below) is still valid and worth having, not as the current default
+scenario.
 
 ## Scaling to more drones
 
 The formation generalizes to any N via `generate_formation()` (a
 sunflower/Fibonacci disk layout — even 2D spread, no accidental
-collinearity, for any N). The attacker and its victim (nearest neighbor)
-are chosen automatically.
+collinearity, for any N).
 
-**A real, non-obvious finding from doing this**: with a *fixed* attack
-rate, N=15 shows dramatically *less* physical danger than N=6 — no
-collision at all, versus a clean collision at N=6. This is not a bug. Each
+**A real, non-obvious finding from doing this** (from `compare_n.py`,
+back when physical danger was still the focus): with a *fixed* attack
+rate, N=15 showed dramatically *less* physical danger than N=6 — no
+collision at all, versus a clean collision at N=6. This was not a bug. Each
 drone's formation guidance (Sec. 5.2) sums a spring correction from every
 other drone; the one falsified link is 1-in-5 of that sum at N=6 but only
 1-in-14 at N=15, so a larger, more connected swarm is structurally more
@@ -59,9 +78,10 @@ comparable danger at both sizes for an apples-to-apples comparison:
 | 6 | 0.5 m / 10 cycles | Yes | t = 55.80s | t = 10.65s |
 | 15 | 1.2 m / 10 cycles | Yes | t = 35.25s | t = 10.65s |
 
-The detection architecture itself required **no changes at all** to scale
-from 6 to 15 drones — same code, same layers, same local evidence rule.
-Only the physical attack parameters needed re-tuning, and only because the
+**The result that still matters now**: the detection architecture itself
+required **no changes at all** to scale from 6 to 15 drones — same code,
+same layers, same local evidence rule. Only the physical attack parameters
+needed re-tuning, and only because the
 *control* architecture's robustness scales with connectivity, which is a
 separate, interesting result in its own right.
 
@@ -77,21 +97,23 @@ a new configuration.
 
 ## What's simulated
 
-- **6 drones** in a well-spread 2D formation (mirrors the paper's Fig. 1
-  teaser: D1..D6), ranging against every other drone once per cycle
-  (Sec. "TDMA Mesh Schedule").
-- **D2 is the attacker, D5 is the victim** — the same falsified link shown
-  in the paper's teaser figure.
+- **N=15 drones** by default (scales to any N — see "Scaling to more
+  drones" below) in a well-spread 2D formation, ranging against every
+  other drone once per cycle (Sec. "TDMA Mesh Schedule").
+- **D2 is the attacker**; it falsifies its reported range to `N_VICTIMS`
+  (default 3) other drones simultaneously, chosen at random from a seeded
+  generator rather than fixed by hand.
 - Every drone runs the **real pipeline** from Sec. 5.2: range measurement
   → pairwise EKF (Sec. 2.3) → formation guidance (spring-damper toward a
   nominal formation) → collision-safety filter (CBF-style, `p^T a_rel ≥ c`).
 - **No mitigation is applied to a flagged link** — this is a deliberate,
   direct reflection of the paper's explicit scope (Sec. 3): the paper's
-  contribution stops at detection and attribution, not response. Part 1
-  therefore shows what an *undefended* swarm actually suffers.
+  contribution stops at detection and attribution, not response.
 - Detection (Sec. 6) runs in parallel, observing the same ranging stream.
-  It does not alter the physics — this lets Part 1 (physical outcome) and
-  Part 2 (detection outcome) be compared on the same timeline.
+  It does not alter the physics. Physical outcome (Part 1) is retained for
+  context but is no longer the point — detection and attribution (Part 2),
+  in particular how many of the N-1 other drones detect and correctly
+  identify the attacker, is.
 
 ## The attack model, explicitly
 
@@ -114,23 +136,22 @@ not a simulation bug, and it's why the staircase profile is used instead —
 consistent with the paper's own framing of the gradual attack as one that
 "remains within the swarm's ordinary noise floor on any single exchange."
 
-## Key results (seed=7, default parameters: N=15)
+## Key results (seed=7, default parameters: N=15, 3 random victims)
 
 | Event | Time |
 |---|---|
 | Attack onset | t = 9.0s |
-| **Collision threshold crossed (undefended)** | **t = 35.25s** |
-| D7 (victim, has direct Layer-3 access) declares D2 compromised | **t = 10.65s** |
-| Fastest indirect observer (D8, Layer 1 + Layer 2 only) | t = 12.90s |
-| Remaining 12 non-victim drones (Layer 1 + Layer 2 only) | t = 13.05-13.35s |
+| The 3 direct victims (D10, D11, D13) declare D2 compromised | **t = 10.65s** |
+| Remaining 11 non-victim drones (Layer 1 + Layer 2 only) | t = 12.30s |
+| **Final detection count** | **14 / 14 other drones** |
 
-The headline result: **the victim detects and correctly attributes the
-attack ~24.6 seconds before physical collision occurs.** Drones without
-direct Layer-3 access (i.e., that never initiated an exchange against the
-attacker themselves) take a bit longer, relying on Layer 1's CUSUM
-and Layer 2's geometric corroboration alone — a direct, visible
-illustration of why the paper layers multiple mechanisms rather than
-relying on any one of them.
+The headline result: **every single other drone in the swarm independently
+detects and correctly identifies the attacker, and the drones the attacker
+directly targeted do so almost immediately** (t=10.65s) via Layer 3's
+unambiguous cross-check. Drones without a directly falsified link to check
+still get there via Layer 1's CUSUM and Layer 2's geometric corroboration
+alone, just ~1.65s later — a direct, visible illustration of why the paper
+layers multiple mechanisms rather than relying on any one of them.
 
 ## Known simplifications (stated plainly, not hidden)
 
@@ -151,10 +172,12 @@ relying on any one of them.
   to prevent the whole formation's centroid from drifting unboundedly — a
   known property of purely relative-only formation control with no
   absolute anchor, unrelated to the attack itself.
-- Part 1 plots are truncated shortly after collision, since continuing to
-  integrate the simplified controller well past a real collision produces
-  unbounded drift that isn't part of the phenomenon being demonstrated.
-  Part 2 (detection) plots use the full simulated range.
+- Part 1's trajectory/separation plots are truncated shortly after a
+  collision *if one occurs* (continuing to integrate the simplified
+  controller well past a real collision produces unbounded drift that
+  isn't part of the phenomenon being demonstrated); with no collision, as
+  in the current default scenario, no truncation happens. Part 2
+  (detection) plots always use the full simulated range regardless.
 
 ## File overview
 
@@ -164,3 +187,5 @@ relying on any one of them.
 - `detection.py` — Layers 1/2/3 + Sec. 6.4 local evidence combination
 - `simulate.py` — orchestration, plotting, `summary.txt`
 - `animate.py` — animated visualization of the same scenario (MP4 + GIF)
+- `compare_n.py` — legacy N=6 vs N=15 collision-focused comparison (see
+  "Scaling to more drones"); not part of the current default scenario

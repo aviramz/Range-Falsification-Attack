@@ -47,7 +47,8 @@ def build_animation(res: dict) -> None:
     labels = [f"D{k+1}" for k in range(S.N)]
     colors = ["#7f7f7f"] * S.N
     colors[S.ATTACKER] = "#d62728"
-    colors[S.VICTIM] = "#1f77b4"
+    for v in S.VICTIMS:
+        colors[v] = "#1f77b4"
 
     fig, (ax_map, ax_sep) = plt.subplots(1, 2, figsize=(12, 5.2), gridspec_kw={"width_ratios": [1.3, 1]})
 
@@ -63,11 +64,14 @@ def build_animation(res: dict) -> None:
     trail_lines = [ax_map.plot([], [], color=colors[k], lw=1.0, alpha=0.5)[0] for k in range(S.N)]
     dots = [ax_map.plot([], [], "o", color=colors[k], ms=9, mec="black", mew=0.6, zorder=5)[0]
             for k in range(S.N)]
-    # Drone number labels only for attacker/victim (avoids N overlapping
+    # Drone number labels only for attacker/victims (avoids N overlapping
     # labels at higher N); others are just gray dots per the legend.
     labels_txt = {k: ax_map.text(0, 0, labels[k], fontsize=8, ha="center", va="bottom", zorder=6)
-                  for k in (S.ATTACKER, S.VICTIM)}
-    attack_link, = ax_map.plot([], [], color="#d62728", lw=2.0, ls=(0, (4, 2)), zorder=4)
+                  for k in (S.ATTACKER, *S.VICTIMS)}
+    # One falsified-link line per victim, since the attacker may target
+    # several drones simultaneously.
+    attack_links = {v: ax_map.plot([], [], color="#d62728", lw=2.0, ls=(0, (4, 2)), zorder=4)[0]
+                     for v in S.VICTIMS}
     # A compact ring (not text) drawn at each flagged drone's position --
     # scales to any N without labels piling up on top of each other.
     detect_rings = {i: ax_map.plot([], [], "o", ms=15, mfc="none", mec="#2ca02c", mew=1.8, zorder=6)[0]
@@ -82,8 +86,9 @@ def build_animation(res: dict) -> None:
     legend_elems = [
         Line2D([0], [0], marker="o", color="w", markerfacecolor=colors[S.ATTACKER],
                markeredgecolor="black", label=f"{labels[S.ATTACKER]} (attacker)", ms=9),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=colors[S.VICTIM],
-               markeredgecolor="black", label=f"{labels[S.VICTIM]} (victim)", ms=9),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="#1f77b4",
+               markeredgecolor="black",
+               label="victims: " + ", ".join(labels[v] for v in S.VICTIMS), ms=9),
         Line2D([0], [0], marker="o", color="w", markerfacecolor="#7f7f7f",
                markeredgecolor="black", label="other drones", ms=9),
         Line2D([0], [0], color="#d62728", lw=2.0, ls=(0, (4, 2)), label="falsified link (active)"),
@@ -111,8 +116,9 @@ def build_animation(res: dict) -> None:
             d.set_data([], [])
         for r in detect_rings.values():
             r.set_data([], [])
-        attack_link.set_data([], [])
-        return trail_lines + dots + [attack_link]
+        for link in attack_links.values():
+            link.set_data([], [])
+        return trail_lines + dots + list(attack_links.values())
 
     n_others = S.N - 1  # everyone except the attacker
 
@@ -137,10 +143,12 @@ def build_animation(res: dict) -> None:
 
         if attack_active:
             a_xy = pos[cycle, S.ATTACKER]
-            v_xy = pos[cycle, S.VICTIM]
-            attack_link.set_data([a_xy[0], v_xy[0]], [a_xy[1], v_xy[1]])
+            for v, link in attack_links.items():
+                v_xy = pos[cycle, v]
+                link.set_data([a_xy[0], v_xy[0]], [a_xy[1], v_xy[1]])
         else:
-            attack_link.set_data([], [])
+            for link in attack_links.values():
+                link.set_data([], [])
 
         n_flagged = 0
         for i, ring in detect_rings.items():
@@ -160,7 +168,8 @@ def build_animation(res: dict) -> None:
         time_marker.set_xdata([t, t])
 
         return (trail_lines + dots + list(labels_txt.values())
-                + [attack_link, title_map, time_marker, detect_counter] + list(detect_rings.values()))
+                + list(attack_links.values()) + [title_map, time_marker, detect_counter]
+                + list(detect_rings.values()))
 
     anim = animation.FuncAnimation(fig, frame_update, frames=frame_cycles, init_func=init,
                                     interval=1000 / 20, blit=False)

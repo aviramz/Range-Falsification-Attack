@@ -1,20 +1,22 @@
-=== Baseline outcome (no mitigation, Sec. 3 scope) ===
+=== Baseline outcome (no mitigation, Sec. 3 scope; physical danger not the focus) ===
 Collision threshold (1.2 m) crossed at cycle 235 (t = 35.25s)
 
 === Detection outcome (Sec. 6) ===
+14 / 14 other drones detected and identified D2 as the compromised drone by the end of the simulation.
+
+  D7 (victim): declared D2 compromised at cycle 71 (t = 10.65s)
+  D8: declared D2 compromised at cycle 86 (t = 12.90s)
+  D11: declared D2 compromised at cycle 87 (t = 13.05s)
   D1: declared D2 compromised at cycle 89 (t = 13.35s)
   D3: declared D2 compromised at cycle 89 (t = 13.35s)
   D4: declared D2 compromised at cycle 89 (t = 13.35s)
   D5: declared D2 compromised at cycle 89 (t = 13.35s)
   D6: declared D2 compromised at cycle 89 (t = 13.35s)
-  D7: declared D2 compromised at cycle 71 (t = 10.65s)
-  D8: declared D2 compromised at cycle 86 (t = 12.90s)
   D9: declared D2 compromised at cycle 89 (t = 13.35s)
   D10: declared D2 compromised at cycle 89 (t = 13.35s)
-  D11: declared D2 compromised at cycle 87 (t = 13.05s)
   D12: declared D2 compromised at cycle 89 (t = 13.35s)
   D13: declared D2 compromised at cycle 89 (t = 13.35s)
   D14: declared D2 compromised at cycle 89 (t = 13.35s)
   D15: declared D2 compromised at cycle 89 (t = 13.35s)
 
-Attack: D2 -> D7, enlarge by 50.0 m, onset cycle 60, staircase +1.2 m every 10 cycles (1.5s per step)
+Attack: D2 -> {D7} (1 simultaneously falsified links), enlarge by 50.0 m, onset cycle 60, staircase +1.2 m every 10 cycles (1.5s per step)

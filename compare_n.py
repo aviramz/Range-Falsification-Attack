@@ -1,6 +1,15 @@
 """
 compare_n.py
 ============
+NOTE: this script was built when physical collision danger was still part
+of what this simulation demonstrated (see README history). That is no
+longer the focus -- the simulation now targets detection and attribution
+only (Sec. 6), with random/multi-victim attacks (see simulate.py). This
+script is kept for the N-scaling comparison it still validly shows (the
+detection architecture needs zero changes to scale from 6 to 15 drones),
+but its per-N attack tuning is calibrated for the collision outcome it was
+originally built to demonstrate, not for the current default scenario.
+
 Runs the same attack scenario at N=6 and N=15 side by side, into separate
 output folders, to show the "dilution" effect discovered while scaling this
 simulation up: each drone's formation guidance (Sec. 5.2) sums a spring
@@ -38,6 +47,7 @@ def run_one(n: int, step_size_m: float, label: str) -> dict:
     dists = np.linalg.norm(S.INITIAL_POS - S.INITIAL_POS[S.ATTACKER], axis=1)
     dists[S.ATTACKER] = np.inf
     S.VICTIM = int(np.argmin(dists))
+    S.VICTIMS = [S.VICTIM]  # single-victim comparison; AttackConfig reads VICTIMS
     S.ATTACK_STEP_SIZE_M = step_size_m
     S.ATTACK_MAGNITUDE_M = 50.0  # non-binding ceiling, see ranging.py docstring
 
