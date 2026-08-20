@@ -63,11 +63,21 @@ def build_animation(res: dict) -> None:
     trail_lines = [ax_map.plot([], [], color=colors[k], lw=1.0, alpha=0.5)[0] for k in range(S.N)]
     dots = [ax_map.plot([], [], "o", color=colors[k], ms=9, mec="black", mew=0.6, zorder=5)[0]
             for k in range(S.N)]
-    labels_txt = [ax_map.text(0, 0, labels[k], fontsize=8, ha="center", va="bottom", zorder=6)
-                  for k in range(S.N)]
+    # Drone number labels only for attacker/victim (avoids N overlapping
+    # labels at higher N); others are just gray dots per the legend.
+    labels_txt = {k: ax_map.text(0, 0, labels[k], fontsize=8, ha="center", va="bottom", zorder=6)
+                  for k in (S.ATTACKER, S.VICTIM)}
     attack_link, = ax_map.plot([], [], color="#d62728", lw=2.0, ls=(0, (4, 2)), zorder=4)
-    detect_flags = {i: ax_map.text(0, 0, "", fontsize=13, color="#2ca02c", ha="center", zorder=7)
+    # A compact ring (not text) drawn at each flagged drone's position --
+    # scales to any N without labels piling up on top of each other.
+    detect_rings = {i: ax_map.plot([], [], "o", ms=15, mfc="none", mec="#2ca02c", mew=1.8, zorder=6)[0]
                      for i in range(S.N) if i != S.ATTACKER}
+    # Single aggregate readout instead of per-drone text -- this is what
+    # actually scales to N=15+ legibly.
+    detect_counter = ax_map.text(0.02, 0.02, "", transform=ax_map.transAxes, fontsize=10,
+                                  color="#2ca02c", ha="left", va="bottom", zorder=8,
+                                  bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                                            edgecolor="#2ca02c", alpha=0.9))
 
     legend_elems = [
         Line2D([0], [0], marker="o", color="w", markerfacecolor=colors[S.ATTACKER],
@@ -77,7 +87,8 @@ def build_animation(res: dict) -> None:
         Line2D([0], [0], marker="o", color="w", markerfacecolor="#7f7f7f",
                markeredgecolor="black", label="other drones", ms=9),
         Line2D([0], [0], color="#d62728", lw=2.0, ls=(0, (4, 2)), label="falsified link (active)"),
-        Line2D([0], [0], marker="$\\checkmark$", color="#2ca02c", lw=0, label="declared compromised", ms=10),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="none",
+               markeredgecolor="#2ca02c", mew=1.8, label="declared compromised", ms=10),
     ]
     ax_map.legend(handles=legend_elems, fontsize=7.5, loc="upper right")
 
@@ -98,8 +109,12 @@ def build_animation(res: dict) -> None:
             ln.set_data([], [])
         for d in dots:
             d.set_data([], [])
+        for r in detect_rings.values():
+            r.set_data([], [])
         attack_link.set_data([], [])
         return trail_lines + dots + [attack_link]
+
+    n_others = S.N - 1  # everyone except the attacker
 
     def frame_update(cycle):
         t = cycle * S.DT
@@ -117,7 +132,8 @@ def build_animation(res: dict) -> None:
             traj = pos[trail_start:cycle + 1, k, :]
             trail_lines[k].set_data(traj[:, 0], traj[:, 1])
             dots[k].set_data([pos[cycle, k, 0]], [pos[cycle, k, 1]])
-            labels_txt[k].set_position((pos[cycle, k, 0], pos[cycle, k, 1] + 0.6))
+        for k, txt in labels_txt.items():
+            txt.set_position((pos[cycle, k, 0], pos[cycle, k, 1] + 0.6))
 
         if attack_active:
             a_xy = pos[cycle, S.ATTACKER]
@@ -126,17 +142,25 @@ def build_animation(res: dict) -> None:
         else:
             attack_link.set_data([], [])
 
-        for i, txt in detect_flags.items():
+        n_flagged = 0
+        for i, ring in detect_rings.items():
             dc = detect_cycle.get(i)
             if dc is not None and cycle >= dc:
-                txt.set_position((pos[cycle, i, 0], pos[cycle, i, 1] - 0.9))
-                txt.set_text("\u2713 flagged D2")
+                ring.set_data([pos[cycle, i, 0]], [pos[cycle, i, 1]])
+                n_flagged += 1
             else:
-                txt.set_text("")
+                ring.set_data([], [])
+
+        if n_flagged > 0:
+            detect_counter.set_text(f"\u2713 {n_flagged}/{n_others} drones have declared "
+                                     f"{labels[S.ATTACKER]} compromised")
+        else:
+            detect_counter.set_text("")
 
         time_marker.set_xdata([t, t])
 
-        return trail_lines + dots + labels_txt + [attack_link, title_map, time_marker] + list(detect_flags.values())
+        return (trail_lines + dots + list(labels_txt.values())
+                + [attack_link, title_map, time_marker, detect_counter] + list(detect_rings.values()))
 
     anim = animation.FuncAnimation(fig, frame_update, frames=frame_cycles, init_func=init,
                                     interval=1000 / 20, blit=False)
