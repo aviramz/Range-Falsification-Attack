@@ -4,14 +4,18 @@ detection.py
 Implements the paper's three detection layers (Sec. 6) plus the local
 per-neighbor evidence combination (Sec. 6.4).
 
-Simplification, stated explicitly: this simulation is fully connected (every
-drone "overhears" every ranging exchange every cycle), consistent with the
-connectivity assumption in Sec. 3 (System and Trust Assumptions). Under full
-connectivity, every drone's local Layer-2 range matrix is identical, so we
-compute Layer 2's leave-one-out attribution once per cycle rather than once
-per drone -- the paper's design remains per-drone/local in general (a
-sparser mesh would give each drone its own partial matrix), this is purely
-a simulation-scale simplification, noted here rather than left implicit.
+UPDATED: this simulation now models partial connectivity, not full
+connectivity (see HEARING_RANGE_M in simulate.py). Layer 1 and Layer 3 are
+unaffected -- they only ever use a drone's own direct measurement, which
+always exists (ranging is still full-mesh every cycle, per the TDMA
+schedule). Layer 2's leave_one_out_scores() below is called once PER
+OBSERVER in simulate.py's main loop, each on that observer's own local
+matrix restricted to whichever other drones are within its hearing range
+-- not once globally as an earlier version of this simulation did. This
+means different drones can genuinely reach different conclusions from
+Layer 2 (or get no Layer 2 evidence about the attacker at all, if it
+isn't in their local audible set), which is the paper's actual per-drone/
+local design, not a simplification of it.
 
 Layer 2 also uses plain (unweighted) classical MDS rather than the paper's
 IRLS-robust variant (Sec. 6.2) -- with a single attacker and n as small as

@@ -2,21 +2,21 @@
 Collision threshold (1.2 m) never crossed in 420 cycles (min separation reached: 5.23 m)
 
 === Detection outcome (Sec. 6) ===
-14 / 14 other drones detected and identified D2 as the compromised drone by the end of the simulation.
+9 / 14 other drones detected and identified D2 as the compromised drone by the end of the simulation.
 
   D10 (victim): declared D2 compromised at cycle 71 (t = 10.65s)
   D11 (victim): declared D2 compromised at cycle 71 (t = 10.65s)
   D13 (victim): declared D2 compromised at cycle 71 (t = 10.65s)
-  D1: declared D2 compromised at cycle 82 (t = 12.30s)
-  D3: declared D2 compromised at cycle 82 (t = 12.30s)
-  D4: declared D2 compromised at cycle 82 (t = 12.30s)
-  D5: declared D2 compromised at cycle 82 (t = 12.30s)
-  D6: declared D2 compromised at cycle 82 (t = 12.30s)
-  D7: declared D2 compromised at cycle 82 (t = 12.30s)
-  D8: declared D2 compromised at cycle 82 (t = 12.30s)
-  D9: declared D2 compromised at cycle 82 (t = 12.30s)
-  D12: declared D2 compromised at cycle 82 (t = 12.30s)
-  D14: declared D2 compromised at cycle 82 (t = 12.30s)
-  D15: declared D2 compromised at cycle 82 (t = 12.30s)
+  D3: declared D2 compromised at cycle 83 (t = 12.45s)
+  D8: declared D2 compromised at cycle 83 (t = 12.45s)
+  D5: declared D2 compromised at cycle 87 (t = 13.05s)
+  D1: declared D2 compromised at cycle 88 (t = 13.20s)
+  D7: declared D2 compromised at cycle 91 (t = 13.65s)
+  D15: declared D2 compromised at cycle 97 (t = 14.55s)
+  D4: never declared D2 compromised in 420 cycles
+  D6: never declared D2 compromised in 420 cycles
+  D9: never declared D2 compromised in 420 cycles
+  D12: never declared D2 compromised in 420 cycles
+  D14: never declared D2 compromised in 420 cycles
 
 Attack: D2 -> {D10, D11, D13} (3 simultaneously falsified links), enlarge by 3.0 m, onset cycle 60, staircase +1.2 m every 10 cycles (1.5s per step)

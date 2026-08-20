@@ -100,12 +100,28 @@ a new configuration.
 - **N=15 drones** by default (scales to any N — see "Scaling to more
   drones" below) in a well-spread 2D formation, ranging against every
   other drone once per cycle (Sec. "TDMA Mesh Schedule").
+- **A leader that does not count in the simulation at all**: never eligible
+  as attacker or victim, invisible to every detection layer, never in the
+  ranging matrix. It moves on a real, scripted route (constant velocity —
+  zero acceleration by construction) that the swarm follows via direct PD
+  control on true position/velocity error. This gives the swarm a genuine,
+  legitimate anchor to fly in formation around, rather than the noise-
+  driven whole-swarm drift an earlier version of this simulation had with
+  no absolute reference at all.
 - **D2 is the attacker**; it falsifies its reported range to `N_VICTIMS`
   (default 3) other drones simultaneously, chosen at random from a seeded
   generator rather than fixed by hand.
-- Every drone runs the **real pipeline** from Sec. 5.2: range measurement
-  → pairwise EKF (Sec. 2.3) → formation guidance (spring-damper toward a
-  nominal formation) → collision-safety filter (CBF-style, `p^T a_rel ≥ c`).
+- **Motion is driven entirely by leader-following** — peer-to-peer range
+  estimates are used only for detection, never to drive physical movement.
+  This makes the swarm's physical motion provably immune to the attack by
+  construction (the attacker is never the leader), and sidesteps a couple
+  of real closed-loop stability issues found and documented in git history
+  (a peer-spring/leader-anchor interaction, and a textbook range-only
+  bearing ambiguity) rather than papering over them.
+- Each drone can only overhear a **subset** of other drones' ranging
+  exchanges, based on physical proximity — see "Partial connectivity"
+  below. Its own direct measurements (to every other drone, including the
+  attacker) are always available regardless.
 - **No mitigation is applied to a flagged link** — this is a deliberate,
   direct reflection of the paper's explicit scope (Sec. 3): the paper's
   contribution stops at detection and attribution, not response.
@@ -136,29 +152,55 @@ not a simulation bug, and it's why the staircase profile is used instead —
 consistent with the paper's own framing of the gradual attack as one that
 "remains within the swarm's ordinary noise floor on any single exchange."
 
-## Key results (seed=7, default parameters: N=15, 3 random victims)
+## Key results (seed=7, default parameters: N=15, 3 random victims, partial connectivity)
 
 | Event | Time |
 |---|---|
 | Attack onset | t = 9.0s |
 | The 3 direct victims (D10, D11, D13) declare D2 compromised | **t = 10.65s** |
-| Remaining 11 non-victim drones (Layer 1 + Layer 2 only) | t = 12.30s |
-| **Final detection count** | **14 / 14 other drones** |
+| 6 more drones with Layer 2 corroboration declare D2 compromised | t = 12.45s – 14.55s |
+| **Final detection count** | **9 / 14 other drones** (5 never detect) |
 
-The headline result: **every single other drone in the swarm independently
-detects and correctly identifies the attacker, and the drones the attacker
-directly targeted do so almost immediately** (t=10.65s) via Layer 3's
-unambiguous cross-check. Drones without a directly falsified link to check
-still get there via Layer 1's CUSUM and Layer 2's geometric corroboration
-alone, just ~1.65s later — a direct, visible illustration of why the paper
-layers multiple mechanisms rather than relying on any one of them.
+The headline result: **the drones the attacker directly targeted detect
+and correctly identify it almost immediately** (t=10.65s) via Layer 3's
+unambiguous cross-check — this never depends on connectivity, since it's
+each victim's own direct measurement. Drones with enough nearby structure
+to corroborate via Layer 2 catch up within another few seconds. But
+**5 of the 14 other drones never detect the attack at all**: they were
+never directly lied to (not victims) and are geometrically too far from
+the attacker/victims to get any Layer 2 evidence about it — a genuine,
+visible limitation of partial connectivity, not a bug to be tuned away.
+
+## Partial connectivity: each drone hears only a subset of other links
+
+Ranging is still full-mesh every cycle (every drone directly ranges with
+every other drone, per the TDMA schedule) -- so **Layer 1 and Layer 3 are
+completely unaffected**: they only ever use a drone's own direct
+measurement, which always exists regardless of connectivity. What partial
+connectivity limits is **Layer 2**: overhearing *other* pairs' broadcasts,
+which its geometric consistency check needs several of.
+
+A drone `k` can use another pair `(i,j)`'s broadcast distance only if at
+least one of `i, j` is within `HEARING_RANGE_M` of `k` (12m by default,
+near the formation's median pairwise distance). This guarantees `k`'s
+resulting local matrix is always fully self-consistent (no partial-row
+gaps to work around), while still being genuinely partial: if the
+attacker isn't within `k`'s local neighborhood at all, `k` simply gets no
+Layer 2 evidence about it that cycle, and relies on Layer 1/3 alone
+(which may also never fire, if `k` was never one of the falsified links).
+
+**This produces a materially different, more realistic result** than
+full connectivity: at the default settings, only **9 of 14** other drones
+ever detect and identify the attacker -- the remaining 5 are geometrically
+distant from both the attacker and its victims, get no Layer 2
+corroboration, and (since they were never lied to directly) get nothing
+from Layer 1 either. `part2_detection_count.png` shows this as a
+staircase that climbs and then plateaus below "all 14," rather than
+reaching it -- a direct, visible illustration of a genuine limitation of
+partial connectivity, not swept under the rug.
 
 ## Known simplifications (stated plainly, not hidden)
 
-- **Full connectivity assumed**: every drone overhears every broadcast, so
-  Layer 2's matrix is centralized (computed once/cycle) rather than
-  genuinely per-drone/partial. The paper's design is local-by-construction;
-  this only matters differently at lower connectivity (Sec. 3 assumption).
 - **Unweighted (non-robust) MDS** for Layer 2, not the paper's IRLS-robust
   variant (Sec. 6.2) — visible in `part2_layer2.png` as some honest nodes'
   Δ scores drifting upward too (the "leverage effect" the paper's robust

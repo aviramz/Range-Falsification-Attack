@@ -80,6 +80,27 @@ N_VICTIMS = 3                # attacker falsifies its reported range to this
                              # many other drones simultaneously, each an
                              # independent falsified link
 
+# ---- Partial connectivity (Sec. 3 / Sec. 6.2) ----
+# Ranging itself is still full-mesh every cycle (every drone directly
+# ranges with every other drone, per the TDMA schedule, Sec. "TDMA Mesh
+# Schedule") -- so Layer 1 and Layer 3 are UNAFFECTED by this: they only
+# ever use a drone's own direct measurement to the attacker, which always
+# exists. What partial connectivity limits is OVERHEARING other pairs'
+# broadcasts for Layer 2's geometric consistency check (Sec. 6.2), which
+# needs several OTHER drones' mutual distances, not just its own. A drone
+# far from the rest of a sparse cluster may simply not have enough nearby
+# structure to run a meaningful Layer 2 check on a distant node, even
+# though it still has a perfectly good direct (Layer 1/3) measurement to
+# it -- this models that limitation honestly rather than assuming global
+# broadcast visibility (see detection.py's "full connectivity" note,
+# which this replaces with an actual partial model).
+HEARING_RANGE_M = 12.0  # a drone can only use ANOTHER pair (i,j)'s
+                          # broadcast distance for Layer 2 if at least one
+                          # of i, j is within this range of it -- chosen
+                          # near the formation's median pairwise distance
+                          # (~12m for the default N=15 layout), giving
+                          # genuine partial (not all-or-nothing) coverage
+
 # ---- Leader (does not participate in the simulation at all -- Sec. n/a) ----
 # The leader is not one of the N drones: it never ranges as part of the
 # N(N-1) mesh, is never a possible attacker or victim, and is invisible to
@@ -260,12 +281,34 @@ def run():
         swarm._last_accel = accel
         swarm.step(accel, DT)
 
-        # --- Layer 2 (Sec. 6.2): global matrix under full-connectivity (see detection.py) ---
-        D = np.zeros((N, N))
-        for i in range(N):
-            for j in range(i + 1, N):
-                D[i, j] = D[j, i] = cyc.get(i, j)
-        deltas = leave_one_out_scores(D)
+        # --- Layer 2 (Sec. 6.2): PER-DRONE local matrix, not a shared
+        # global one -- each drone k only uses entries it could actually
+        # overhear (see HEARING_RANGE_M comment above). For any i,j both
+        # within k's hearing range (or equal to k, since k always has its
+        # own direct measurements), the exchange is audible to k because
+        # at least one endpoint is within range of k by construction; this
+        # guarantees the restricted submatrix is fully observed without
+        # needing a separate max-clique search. deltas_per_observer[k] is
+        # None if k doesn't have enough locally-audible structure (<4
+        # nodes) for a meaningful embedding (Sec. 6.2's redundancy
+        # requirement), or if the attacker isn't in k's audible set at
+        # all -- in either case k simply gets no Layer 2 evidence about
+        # the attacker this cycle, falling back on Layer 1/3 alone.
+        deltas_per_observer: dict[int, float] = {}
+        for k in range(N):
+            audible = [k] + [j for j in range(N) if j != k
+                              and cyc.true_dist[(min(k, j), max(k, j))] < HEARING_RANGE_M]
+            if ATTACKER not in audible or len(audible) < 4:
+                deltas_per_observer[k] = 0.0
+                continue
+            idx = {node: local for local, node in enumerate(audible)}
+            D_k = np.zeros((len(audible), len(audible)))
+            for a in range(len(audible)):
+                for b in range(a + 1, len(audible)):
+                    d = cyc.get(audible[a], audible[b])
+                    D_k[a, b] = D_k[b, a] = d
+            local_deltas = leave_one_out_scores(D_k)
+            deltas_per_observer[k] = float(local_deltas[idx[ATTACKER]])
 
         # --- Layer 3 (Sec. 6.3): checked independently for EVERY drone that
         # ranged against the attacker this cycle, not just one hardcoded pair
@@ -284,6 +327,26 @@ def run():
             else:
                 l3_flag_per_observer[i] = False
 
+        # Also save the representative observer's (VICTIM's) full per-node
+        # vector, for the Layer 2 illustrative plot -- NaN for any node
+        # outside VICTIM's own audible set, since under partial
+        # connectivity there is no longer one shared global vector every
+        # observer sees identically (each observer has its own local view;
+        # VICTIM's is just the one plotted as an example).
+        victim_audible = [VICTIM] + [j for j in range(N) if j != VICTIM
+                          and cyc.true_dist[(min(VICTIM, j), max(VICTIM, j))] < HEARING_RANGE_M]
+        victim_delta_vec = np.full(N, np.nan)
+        if len(victim_audible) >= 4:
+            v_idx = {node: local for local, node in enumerate(victim_audible)}
+            D_v = np.zeros((len(victim_audible), len(victim_audible)))
+            for a in range(len(victim_audible)):
+                for b in range(a + 1, len(victim_audible)):
+                    d = cyc.get(victim_audible[a], victim_audible[b])
+                    D_v[a, b] = D_v[b, a] = d
+            v_deltas = leave_one_out_scores(D_v)
+            for node, local in v_idx.items():
+                victim_delta_vec[node] = v_deltas[local]
+
         # --- Sec. 6.4: combine into each observer's local evidence about the attacker ---
         n_detected_this_cycle = 0
         for i in range(N):
@@ -293,7 +356,7 @@ def run():
             evidence[i].accumulate(
                 ATTACKER,
                 layer1_alarm=gate.sequential_flag,
-                delta_j=deltas[ATTACKER],
+                delta_j=deltas_per_observer[i],
                 layer3_flag=l3_flag_per_observer[i],
             )
             hist_evidence_attacker[c, i] = evidence[i].E[ATTACKER]
@@ -313,7 +376,7 @@ def run():
         hist_nis_link[c] = ekfs[(VICTIM, ATTACKER)].last_nis
         hist_cplus[c] = g.C_plus
         hist_cminus[c] = g.C_minus
-        hist_delta[c] = deltas
+        hist_delta[c] = victim_delta_vec
         hist_layer3_flag[c] = l3_flag_per_observer.get(VICTIM, False)
         min_sep = swarm.min_pairwise_distance()
         true_min_sep_series[c] = min_sep
@@ -436,7 +499,8 @@ def make_plots(res: dict) -> None:
                     label="other drones" if not other_labeled else None)
             other_labeled = True
     ax.axvline(onset_t, color="#999999", ls=":", lw=1.0, label="attack onset")
-    ax.set_title(r"Part 2, Layer 2: leave-one-out attribution score $\Delta_m$ (Algorithm 2)")
+    ax.set_title(r"Part 2, Layer 2: $D{}$'s local leave-one-out attribution $\Delta_m$ (Algorithm 2)"
+                 .format(VICTIM + 1))
     ax.set_xlabel("time (s)"); ax.set_ylabel(r"$\Delta_m$")
     ax.legend(fontsize=8)
     fig.tight_layout()
