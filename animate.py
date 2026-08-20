@@ -53,10 +53,13 @@ def build_animation(res: dict) -> None:
     fig, (ax_map, ax_sep) = plt.subplots(1, 2, figsize=(12, 5.2), gridspec_kw={"width_ratios": [1.3, 1]})
 
     # ---- Map panel ----
-    all_xy = pos[:cutoff].reshape(-1, 2)
-    pad = 3.0
-    ax_map.set_xlim(all_xy[:, 0].min() - pad, all_xy[:, 0].max() + pad)
-    ax_map.set_ylim(all_xy[:, 1].min() - pad, all_xy[:, 1].max() + pad)
+    # No fixed axis limits here: the swarm's centroid drifts substantially
+    # over a run (a known property of purely relative-only formation
+    # control with no absolute anchor, see README "Known simplifications"),
+    # while the formation itself stays only ~10-30m across. A camera fixed
+    # to the whole trajectory's extent would shrink the actual formation to
+    # an unreadable speck. frame_update() instead recenters the view on the
+    # swarm's current position every frame ("chase camera").
     ax_map.set_aspect("equal")
     ax_map.set_xlabel("x (m)"); ax_map.set_ylabel("y (m)")
     title_map = ax_map.set_title("")
@@ -140,6 +143,19 @@ def build_animation(res: dict) -> None:
             dots[k].set_data([pos[cycle, k, 0]], [pos[cycle, k, 1]])
         for k, txt in labels_txt.items():
             txt.set_position((pos[cycle, k, 0], pos[cycle, k, 1] + 0.6))
+
+        # Chase camera: recenter on the swarm's current bounding box each
+        # frame, with generous padding, rather than a fixed view sized to
+        # the whole (possibly far-drifting) trajectory. Keeps the actual
+        # formation readable regardless of how far the centroid has moved.
+        cur = pos[cycle]
+        cx_min, cy_min = cur.min(axis=0)
+        cx_max, cy_max = cur.max(axis=0)
+        span = max(cx_max - cx_min, cy_max - cy_min, 1.0)
+        cx_mid, cy_mid = (cx_min + cx_max) / 2, (cy_min + cy_max) / 2
+        half = span * 0.7 + 2.0  # padding: 70% extra room plus a fixed margin
+        ax_map.set_xlim(cx_mid - half, cx_mid + half)
+        ax_map.set_ylim(cy_mid - half, cy_mid + half)
 
         if attack_active:
             a_xy = pos[cycle, S.ATTACKER]
