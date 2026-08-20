@@ -102,10 +102,19 @@ a new configuration.
   other drone once per cycle (Sec. "TDMA Mesh Schedule").
 - **A leader that does not count in the simulation at all**: never eligible
   as attacker or victim, invisible to every detection layer, never in the
-  ranging matrix. It moves on a real, scripted route (constant velocity —
-  zero acceleration by construction) that the swarm follows via direct PD
-  control on true position/velocity error. This gives the swarm a genuine,
-  legitimate anchor to fly in formation around, rather than the noise-
+  ranging matrix. It flies a curved (circular-arc) route using the same
+  "manual motion" mechanism as the original source simulator's
+  `RadialAcceleration` primitive: its velocity is recomputed every cycle
+  as the tangent direction around a fixed center from its *current*
+  position, with speed capped at `sqrt(max_accel * radius)` — a
+  physically-grounded turn-tightness limit, not a closed-form path. Every
+  drone's formation offset is stored in the leader's initial heading frame
+  and rotated by the leader's *current* heading each cycle, so the whole
+  formation rotates rigidly with the leader through the turn — like real
+  formation flight banking together — rather than a fixed-orientation
+  shape being dragged along an arc, or (worse) staying perfectly rigid
+  under a straight-line leader with no turning at all. This also gives the
+  swarm a genuine, legitimate anchor to fly around, rather than the noise-
   driven whole-swarm drift an earlier version of this simulation had with
   no absolute reference at all.
 - **D2 is the attacker**; it falsifies its reported range to `N_VICTIMS`
@@ -116,8 +125,9 @@ a new configuration.
   This makes the swarm's physical motion provably immune to the attack by
   construction (the attacker is never the leader), and sidesteps a couple
   of real closed-loop stability issues found and documented in git history
-  (a peer-spring/leader-anchor interaction, and a textbook range-only
-  bearing ambiguity) rather than papering over them.
+  (a peer-spring/leader-anchor interaction, a textbook range-only bearing
+  ambiguity, and a rotation-frame double-counting bug in an earlier
+  attempt at the rotating-formation math) rather than papering over them.
 - Each drone can only overhear a **subset** of other drones' ranging
   exchanges, based on physical proximity — see "Partial connectivity"
   below. Its own direct measurements (to every other drone, including the

@@ -5,7 +5,6 @@ Collision threshold (1.2 m) never crossed in 420 cycles (min separation reached:
 14 / 14 other drones detected and identified D2 as the compromised drone by the end of the simulation.
 
   D7 (victim): declared D2 compromised at cycle 71 (t = 10.65s)
-  D11: declared D2 compromised at cycle 86 (t = 12.90s)
   D1: declared D2 compromised at cycle 89 (t = 13.35s)
   D3: declared D2 compromised at cycle 89 (t = 13.35s)
   D4: declared D2 compromised at cycle 89 (t = 13.35s)
@@ -14,6 +13,7 @@ Collision threshold (1.2 m) never crossed in 420 cycles (min separation reached:
   D8: declared D2 compromised at cycle 89 (t = 13.35s)
   D9: declared D2 compromised at cycle 89 (t = 13.35s)
   D10: declared D2 compromised at cycle 89 (t = 13.35s)
+  D11: declared D2 compromised at cycle 89 (t = 13.35s)
   D12: declared D2 compromised at cycle 89 (t = 13.35s)
   D13: declared D2 compromised at cycle 89 (t = 13.35s)
   D14: declared D2 compromised at cycle 89 (t = 13.35s)

@@ -111,12 +111,39 @@ HEARING_RANGE_M = 12.0  # a drone can only use ANOTHER pair (i,j)'s
 # issue: without any absolute anchor, the swarm's centroid does a slow
 # random walk driven by measurement noise (a known property of purely
 # relative formation control, see "Known simplifications" in the README).
-# A leader moving at constant velocity gives every drone a true, deliberate
+# A leader moving on a real route gives every drone a true, deliberate
 # common reference, replacing that noise-driven drift with smooth,
 # purposeful motion.
-LEADER_START = np.array([0.0, 0.0])
-LEADER_VELOCITY = np.array([1.5, 1.0])  # constant velocity (m/s) -- zero
-                                          # acceleration by construction
+#
+# The leader's route uses the SAME "manual motion" mechanism as the
+# original source simulator (simulator/scenarios/models.py's
+# RadialAcceleration, applied in runtime.py's _manual_control_command):
+# rather than a closed-form parametric path, the leader's velocity is
+# recomputed every cycle as the tangent direction around LEADER_CENTER
+# from its CURRENT true position, with speed capped at
+# sqrt(LEADER_MAX_RADIAL_ACCEL * radius) -- a physically-grounded limit
+# on how tight a turn is sustainable, taken directly from the source. See
+# radial_leader_velocity() below, a direct port of that logic.
+#
+# Each drone's formation offset is defined in the LEADER'S BODY FRAME
+# (relative to its current heading) rather than as a fixed world-frame
+# vector, so the whole formation rotates rigidly with the leader as it
+# turns -- exactly like real formation flight banking through a turn
+# together, rather than a fixed-orientation shape being dragged along an
+# arc. See leader_nominal_offset_body and the target_pos/vel computation
+# in run() below.
+LEADER_CENTER = np.array([0.0, -40.0])     # center of the leader's circular route
+LEADER_RADIUS0 = 40.0                       # initial distance from center (m)
+LEADER_PHI0 = np.pi / 2                     # starting angle on the circle
+LEADER_SPEED = 1.8                          # requested tangential speed (m/s),
+                                              # matching the previous straight-
+                                              # line speed
+LEADER_MAX_RADIAL_ACCEL = 4.0               # m/s^2 -- caps speed via
+                                              # sqrt(a*r), exactly the safety
+                                              # cap from the source's
+                                              # RadialAcceleration
+LEADER_TURN_SIGN = 1.0                      # +1 = counter-clockwise
+
 LEADER_KP, LEADER_KD = 2.5, 6.0  # KD >= 2*sqrt(KP) (~3.16 here) for
                                    # critical/over-damping; the previous
                                    # KP=KD=2.5 was underdamped, and at
@@ -128,10 +155,23 @@ LEADER_ACCEL_LIMIT = 4.0  # m/s^2, hard saturation -- see comment at
                             # leader_accel_i below
 
 
-def leader_position(cycle: int) -> np.ndarray:
-    """Leader's true position: a straight line at constant velocity (zero
-    acceleration). Not affected by anything in the simulation."""
-    return LEADER_START + LEADER_VELOCITY * (cycle * DT)
+def radial_leader_velocity(pos: np.ndarray) -> np.ndarray:
+    """
+    Direct port of the source simulator's RadialAcceleration manual-motion
+    rule (simulator/scenarios/runtime.py, _manual_control_command): the
+    tangent direction around LEADER_CENTER from the CURRENT position `pos`,
+    at a speed capped by sqrt(LEADER_MAX_RADIAL_ACCEL * radius) -- the
+    source's physically-grounded limit on sustainable turn tightness.
+    """
+    radial = pos - LEADER_CENTER
+    tangent = np.array([-radial[1], radial[0]])  # cross((0,0,1), radial) in 2D
+    radius = np.linalg.norm(tangent)
+    max_speed = np.sqrt(LEADER_MAX_RADIAL_ACCEL * radius)
+    speed = min(LEADER_SPEED, max_speed)
+    direction = tangent / radius
+    if LEADER_TURN_SIGN < 0:
+        direction = -direction
+    return direction * speed
 
 
 def generate_formation(n: int, spacing: float = 3.0) -> np.ndarray:
@@ -210,7 +250,28 @@ def run():
     # relevant) peer links. Direct PD control on true position/velocity
     # error to a scripted target is unconditionally stable and has no
     # such ambiguity, and does not touch anything detection depends on.
-    leader_nominal_offset = {i: INITIAL_POS[i] - LEADER_START for i in range(N)}
+    #
+    # Offsets are stored as plain WORLD-FRAME vectors at t=0 (the initial
+    # true offset from the leader) -- NOT pre-rotated into any "body
+    # frame". Each cycle, this initial offset is rotated by the
+    # INCREMENTAL heading change since t=0 (identity at t=0 by
+    # construction, so the initial condition is exactly correct); this is
+    # what makes the formation rotate rigidly with the leader through a
+    # turn rather than being dragged along at a fixed absolute
+    # orientation. Target velocity is obtained by finite-differencing the
+    # rotated target position cycle-to-cycle rather than a closed-form
+    # derivative, since the leader's own velocity (radial_leader_velocity)
+    # is itself a feedback rule recomputed from its current position, not
+    # a closed-form function of time -- finite-differencing works
+    # correctly regardless of the underlying leader motion law.
+    leader_pos = LEADER_CENTER + LEADER_RADIUS0 * np.array(
+        [np.cos(LEADER_PHI0), np.sin(LEADER_PHI0)])
+    leader_vel0 = radial_leader_velocity(leader_pos)
+    heading0 = np.arctan2(leader_vel0[1], leader_vel0[0])
+    leader_nominal_offset_world0 = {
+        i: INITIAL_POS[i] - leader_pos for i in range(N)
+    }
+    prev_target_pos = {i: INITIAL_POS[i].copy() for i in range(N)}
 
     attack = AttackConfig(ATTACKER, VICTIMS, ATTACK_DIRECTION, ATTACK_MAGNITUDE_M,
                            ATTACK_ONSET_CYCLE, ATTACK_STEP_EVERY, ATTACK_STEP_SIZE_M)
@@ -236,7 +297,12 @@ def run():
 
     for c in range(CYCLES):
         cyc = RangingCycle(swarm, SIGMA_RANGE, rng, attack, c)
-        leader_true_pos = leader_position(c)
+        # Leader state for this cycle: velocity is a feedback rule on the
+        # CURRENT position (radial_leader_velocity), matching the source's
+        # RadialAcceleration manual-motion mechanism -- not a closed-form
+        # function of time.
+        leader_true_pos = leader_pos
+        leader_true_vel = radial_leader_velocity(leader_true_pos)
 
         # --- EKF predict+update for every ordered pair (i observes j) ---
         # accelerations realized last step are shared (only RANGE is attacked,
@@ -262,17 +328,27 @@ def run():
                 gate.update(ek.last_nis, ek.standardized_innovation)
 
         # --- Leader-following: direct PD control on TRUE position/velocity
-        # error to the scripted target (leader_true_pos + nominal offset),
-        # with the leader's true constant velocity as the target velocity.
-        # No estimator in this loop at all -- see the module-level comment
-        # above for why. Detection (Sec. 6) is entirely unaffected: it
-        # still runs on the full peer EKFs/ranging exactly as before,
-        # independent of what drives physical motion.
+        # error to a target that ROTATES with the leader's current heading
+        # (see module-level comment above) -- not a fixed world-frame
+        # offset. Target velocity comes from finite-differencing the
+        # rotated target position cycle-to-cycle, which is correct
+        # regardless of the underlying leader motion law. No estimator in
+        # this loop at all -- see the module-level comment above for why.
+        # Detection (Sec. 6) is entirely unaffected: it still runs on the
+        # full peer EKFs/ranging exactly as before, independent of what
+        # drives physical motion.
+        heading_t = np.arctan2(leader_true_vel[1], leader_true_vel[0])
+        delta_theta = heading_t - heading0
+        ct, st = np.cos(delta_theta), np.sin(delta_theta)
+        Rt = np.array([[ct, -st], [st, ct]])
+
         accel = np.zeros((N, 2))
         for i in range(N):
-            target_pos = leader_true_pos + leader_nominal_offset[i]
+            target_pos = leader_true_pos + Rt @ leader_nominal_offset_world0[i]
+            target_vel = (target_pos - prev_target_pos[i]) / DT if c > 0 else leader_true_vel
+            prev_target_pos[i] = target_pos.copy()
             pos_error = target_pos - swarm.pos[i]
-            vel_error = LEADER_VELOCITY - swarm.vel[i]
+            vel_error = target_vel - swarm.vel[i]
             a = LEADER_KP * pos_error + LEADER_KD * vel_error
             a_norm = np.linalg.norm(a)
             if a_norm > LEADER_ACCEL_LIMIT:
@@ -280,6 +356,11 @@ def run():
             accel[i] = a
         swarm._last_accel = accel
         swarm.step(accel, DT)
+
+        # Advance leader state for next cycle (after this cycle's targets
+        # were computed from its current position, matching how the
+        # source's manual-motion velocity command is applied per-step).
+        leader_pos = leader_true_pos + leader_true_vel * DT
 
         # --- Layer 2 (Sec. 6.2): PER-DRONE local matrix, not a shared
         # global one -- each drone k only uses entries it could actually
